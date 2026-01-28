@@ -5,6 +5,9 @@ import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
+# Bot version
+BOT_VERSION = "0.0.1"
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -112,6 +115,7 @@ async def send_levelup_message(guild, member, level, context_channel=None):
 
 @bot.event
 async def on_ready():
+    print(f'Bot Version: {BOT_VERSION}')
     print(f'{bot.user} has connected to Discord!')
     print(f'Bot is in {len(bot.guilds)} guilds')
 
@@ -362,6 +366,7 @@ async def leaderboard(ctx, page: int = 1):
 async def xp_config(ctx):
     """Show current XP configuration (Admin only)"""
     embed = discord.Embed(title="⚙️ XP Configuration", color=discord.Color.green())
+    embed.add_field(name="Bot Version", value=BOT_VERSION, inline=True)
     embed.add_field(name="XP per Message", value=XP_PER_MESSAGE, inline=True)
     embed.add_field(name="XP per Reaction", value=XP_PER_REACTION, inline=True)
     embed.add_field(name="XP per VC Minute", value=XP_PER_MINUTE_VC, inline=True)
@@ -391,6 +396,15 @@ async def reset_xp(ctx, member: discord.Member):
         await ctx.send(f"✅ Reset XP for {member.display_name}")
     else:
         await ctx.send(f"❌ No XP data found for {member.display_name}")
+
+
+@bot.command(name='version')
+async def version(ctx):
+    """Display the bot version"""
+    embed = discord.Embed(title="🤖 Bot Information", color=discord.Color.purple())
+    embed.add_field(name="Version", value=BOT_VERSION, inline=True)
+    embed.add_field(name="Bot Name", value=bot.user.name, inline=True)
+    await ctx.send(embed=embed)
 
 
 if __name__ == '__main__':
