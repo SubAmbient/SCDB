@@ -9,6 +9,11 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+# Get levelup channel ID from environment (optional)
+LEVELUP_CHANNEL_ID = os.getenv('LEVELUP_CHANNEL_ID')
+if LEVELUP_CHANNEL_ID:
+    LEVELUP_CHANNEL_ID = int(LEVELUP_CHANNEL_ID)
+
 # Bot configuration
 INTENTS = discord.Intents.default()
 INTENTS.message_content = True  # Required for reading message content
@@ -83,10 +88,38 @@ def xp_for_next_level(level):
     return (level ** 2) * 100
 
 
+async def send_levelup_message(guild, member, level, context_channel=None):
+    """Send level-up message to configured channel or fallback to context channel"""
+    message = f"🎉 {member.mention} leveled up to **Level {level}**!"
+
+    # Try to send to configured channel first
+    if LEVELUP_CHANNEL_ID:
+        channel = guild.get_channel(LEVELUP_CHANNEL_ID)
+        if channel and channel.permissions_for(guild.me).send_messages:
+            await channel.send(message)
+            return
+
+    # Fallback to context channel if provided
+    if context_channel and context_channel.permissions_for(guild.me).send_messages:
+        await context_channel.send(message)
+        return
+
+    # Last resort: find any channel we can send to
+    for channel in guild.text_channels:
+        if channel.permissions_for(guild.me).send_messages:
+            await channel.send(message)
+            break
+
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     print(f'Bot is in {len(bot.guilds)} guilds')
+
+    if LEVELUP_CHANNEL_ID:
+        print(f'Level-up messages will be sent to channel ID: {LEVELUP_CHANNEL_ID}')
+    else:
+        print('No level-up channel configured - messages will be sent in context channel')
 
     # Initialize voice_join_times for users already in voice channels
     for guild in bot.guilds:
@@ -132,9 +165,7 @@ async def on_message(message):
 
     # Check for level up
     if user_data['level'] > old_level:
-        await message.channel.send(
-            f"🎉 {message.author.mention} leveled up to **Level {user_data['level']}**!"
-        )
+        await send_levelup_message(message.guild, message.author, user_data['level'], message.channel)
 
     await bot.process_commands(message)
 
@@ -159,9 +190,7 @@ async def on_reaction_add(reaction, user):
 
     # Check for level up
     if user_data['level'] > old_level:
-        await reaction.message.channel.send(
-            f"🎉 {user.mention} leveled up to **Level {user_data['level']}**!"
-        )
+        await send_levelup_message(reaction.message.guild, user, user_data['level'], reaction.message.channel)
 
 
 @bot.event
@@ -207,13 +236,7 @@ async def check_voice_xp():
 
                     # Check for level up
                     if user_data['level'] > old_level:
-                        # Try to send message in a general channel
-                        for channel in guild.text_channels:
-                            if channel.permissions_for(guild.me).send_messages:
-                                await channel.send(
-                                    f"🎉 {member.mention} leveled up to **Level {user_data['level']}** while in voice chat!"
-                                )
-                                break
+                        await send_levelup_message(guild, member, user_data['level'])
 
     save_data(data)
 
@@ -324,6 +347,13 @@ async def xp_config(ctx):
     embed.add_field(name="XP per Reaction", value=XP_PER_REACTION, inline=True)
     embed.add_field(name="XP per VC Minute", value=XP_PER_MINUTE_VC, inline=True)
     embed.add_field(name="Message Cooldown", value=f"{MESSAGE_COOLDOWN}s", inline=True)
+
+    if LEVELUP_CHANNEL_ID:
+        channel = ctx.guild.get_channel(LEVELUP_CHANNEL_ID)
+        channel_name = channel.mention if channel else f"ID: {LEVELUP_CHANNEL_ID} (Not Found)"
+        embed.add_field(name="Level-up Channel", value=channel_name, inline=True)
+    else:
+        embed.add_field(name="Level-up Channel", value="Context Channel (Not Configured)", inline=True)
 
     await ctx.send(embed=embed)
 
