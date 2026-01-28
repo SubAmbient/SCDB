@@ -3,7 +3,6 @@ from discord.ext import commands, tasks
 import json
 import os
 from datetime import datetime, timedelta
-import asyncio
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -172,13 +171,15 @@ async def on_message(message):
 
 @bot.event
 async def on_reaction_add(reaction, user):
-    """Award XP for adding reactions"""
+    """Award XP for adding reactions and receiving reactions"""
     # Ignore bot reactions
     if user.bot:
         return
 
-    # Load data and award XP
+    # Load data
     data = load_data()
+
+    # Award XP to the person who added the reaction
     user_data = get_user_data(data, reaction.message.guild.id, user.id, str(user))
 
     old_level = user_data['level']
@@ -186,11 +187,25 @@ async def on_reaction_add(reaction, user):
     user_data['reactions'] += 1
     user_data['level'] = calculate_level(user_data['xp'])
 
-    save_data(data)
-
-    # Check for level up
+    # Check for level up for the person who reacted
     if user_data['level'] > old_level:
         await send_levelup_message(reaction.message.guild, user, user_data['level'], reaction.message.channel)
+
+    # Award XP to the message author (if they're not a bot and not reacting to their own message)
+    if not reaction.message.author.bot and reaction.message.author.id != user.id:
+        author_data = get_user_data(data, reaction.message.guild.id, reaction.message.author.id,
+                                    str(reaction.message.author))
+
+        old_author_level = author_data['level']
+        author_data['xp'] += XP_PER_REACTION
+        author_data['level'] = calculate_level(author_data['xp'])
+
+        # Check for level up for the message author
+        if author_data['level'] > old_author_level:
+            await send_levelup_message(reaction.message.guild, reaction.message.author, author_data['level'],
+                                       reaction.message.channel)
+
+    save_data(data)
 
 
 @bot.event
@@ -220,10 +235,14 @@ async def check_voice_xp():
 
     for guild in bot.guilds:
         for voice_channel in guild.voice_channels:
-            for member in voice_channel.members:
-                if member.bot:
-                    continue
+            # Count non-bot members in the channel
+            non_bot_members = [m for m in voice_channel.members if not m.bot]
 
+            # Skip if only one person (or no one) is in the channel
+            if len(non_bot_members) <= 1:
+                continue
+
+            for member in non_bot_members:
                 user_key = f"{guild.id}_{member.id}"
                 if user_key in voice_join_times:
                     # Award XP for 1 minute (60 seconds)
