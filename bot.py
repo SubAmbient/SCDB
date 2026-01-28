@@ -23,7 +23,7 @@ bot = commands.Bot(command_prefix='!', intents=INTENTS)
 XP_PER_MESSAGE = 10
 XP_PER_REACTION = 5
 XP_PER_MINUTE_VC = 2
-MESSAGE_COOLDOWN = 60  # Seconds between XP gains from messages
+MESSAGE_COOLDOWN = 5
 
 # Database file
 DB_FILE = 'xp_data.json'
@@ -62,7 +62,7 @@ def get_user_data(data, guild_id, user_id, username=None):
             'level': 1,
             'messages': 0,
             'reactions': 0,
-            'vc_minutes': 0
+            'vc_seconds': 0
         }
     else:
         # Update username if provided (in case user changed their name)
@@ -167,41 +167,20 @@ async def on_reaction_add(reaction, user):
 @bot.event
 async def on_voice_state_update(member, before, after):
     """Track voice channel join/leave times"""
+    if member.bot:
+        return
+
+    user_key = f"{member.guild.id}_{member.id}"
+
     # User joined a voice channel
     if before.channel is None and after.channel is not None:
-        voice_join_times[f"{member.guild.id}_{member.id}"] = datetime.now()
+        voice_join_times[user_key] = datetime.now()
 
     # User left a voice channel
     elif before.channel is not None and after.channel is None:
-        user_key = f"{member.guild.id}_{member.id}"
         if user_key in voice_join_times:
-            # Calculate time spent
-            time_spent = datetime.now() - voice_join_times[user_key]
-            minutes = int(time_spent.total_seconds() / 60)
-
-            if minutes > 0:
-                # Award XP
-                data = load_data()
-                user_data = get_user_data(data, member.guild.id, member.id, str(member))
-
-                old_level = user_data['level']
-                xp_gained = minutes * XP_PER_MINUTE_VC
-                user_data['xp'] += xp_gained
-                user_data['vc_minutes'] += minutes
-                user_data['level'] = calculate_level(user_data['xp'])
-
-                save_data(data)
-
-                # Check for level up
-                if user_data['level'] > old_level:
-                    # Try to send message in a general channel
-                    for channel in member.guild.text_channels:
-                        if channel.permissions_for(member.guild.me).send_messages:
-                            await channel.send(
-                                f"🎉 {member.mention} leveled up to **Level {user_data['level']}** after spending time in voice chat!"
-                            )
-                            break
-
+            # The periodic task handles awarding XP for full minutes
+            # Just clean up the tracking
             del voice_join_times[user_key]
 
 
@@ -209,7 +188,6 @@ async def on_voice_state_update(member, before, after):
 async def check_voice_xp():
     """Periodically award XP to users currently in voice channels"""
     data = load_data()
-    current_time = datetime.now()
 
     for guild in bot.guilds:
         for voice_channel in guild.voice_channels:
@@ -219,31 +197,23 @@ async def check_voice_xp():
 
                 user_key = f"{guild.id}_{member.id}"
                 if user_key in voice_join_times:
-                    # Calculate actual time spent since last check
-                    time_spent = current_time - voice_join_times[user_key]
-                    minutes = int(time_spent.total_seconds() / 60)
+                    # Award XP for 1 minute (60 seconds)
+                    user_data = get_user_data(data, guild.id, member.id, str(member))
+                    old_level = user_data['level']
 
-                    if minutes > 0:
-                        # Award XP for actual minutes spent
-                        user_data = get_user_data(data, guild.id, member.id, str(member))
-                        old_level = user_data['level']
-                        xp_gained = minutes * XP_PER_MINUTE_VC
-                        user_data['xp'] += xp_gained
-                        user_data['vc_minutes'] += minutes
-                        user_data['level'] = calculate_level(user_data['xp'])
+                    user_data['xp'] += XP_PER_MINUTE_VC
+                    user_data['vc_seconds'] += 60
+                    user_data['level'] = calculate_level(user_data['xp'])
 
-                        # Check for level up
-                        if user_data['level'] > old_level:
-                            # Try to send message in a general channel
-                            for channel in guild.text_channels:
-                                if channel.permissions_for(guild.me).send_messages:
-                                    await channel.send(
-                                        f"🎉 {member.mention} leveled up to **Level {user_data['level']}** while in voice chat!"
-                                    )
-                                    break
-
-                    # Reset the join time to now for next check
-                    voice_join_times[user_key] = current_time
+                    # Check for level up
+                    if user_data['level'] > old_level:
+                        # Try to send message in a general channel
+                        for channel in guild.text_channels:
+                            if channel.permissions_for(guild.me).send_messages:
+                                await channel.send(
+                                    f"🎉 {member.mention} leveled up to **Level {user_data['level']}** while in voice chat!"
+                                )
+                                break
 
     save_data(data)
 
@@ -275,7 +245,21 @@ async def rank(ctx, member: discord.Member = None):
                     inline=False)
     embed.add_field(name="Messages", value=user_data['messages'], inline=True)
     embed.add_field(name="Reactions", value=user_data['reactions'], inline=True)
-    embed.add_field(name="VC Minutes", value=user_data['vc_minutes'], inline=True)
+
+    # Format VC time (support both old vc_minutes and new vc_seconds)
+    vc_seconds = user_data.get('vc_seconds', user_data.get('vc_minutes', 0) * 60)
+    hours = vc_seconds // 3600
+    minutes = (vc_seconds % 3600) // 60
+    seconds = vc_seconds % 60
+
+    if hours > 0:
+        vc_time_str = f"{hours}h {minutes}m {seconds}s"
+    elif minutes > 0:
+        vc_time_str = f"{minutes}m {seconds}s"
+    else:
+        vc_time_str = f"{seconds}s"
+
+    embed.add_field(name="VC Time", value=vc_time_str, inline=True)
 
     await ctx.send(embed=embed)
 
