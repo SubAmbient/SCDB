@@ -26,14 +26,37 @@ INTENTS.reactions = True
 
 bot = commands.Bot(command_prefix='!', intents=INTENTS)
 
-# XP Configuration
-XP_PER_MESSAGE = 10
-XP_PER_REACTION = 5
-XP_PER_MINUTE_VC = 2
-MESSAGE_COOLDOWN = 5
-
-# Database file
+# Configuration files
+CONFIG_FILE = 'config.json'
 DB_FILE = 'xp_data.json'
+
+# Default XP Configuration
+DEFAULT_CONFIG = {
+    'xp_per_message': 5,
+    'xp_per_reaction': 5,
+    'xp_per_minute_vc': 2,
+    'message_cooldown': 10
+}
+
+# Load or create config
+def load_config():
+    """Load configuration from JSON file, create if doesn't exist"""
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    else:
+        # Create config file with defaults
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(DEFAULT_CONFIG, f, indent=4)
+        print(f"Created {CONFIG_FILE} with default values")
+        return DEFAULT_CONFIG.copy()
+
+# Load configuration
+config = load_config()
+XP_PER_MESSAGE = config.get('xp_per_message', DEFAULT_CONFIG['xp_per_message'])
+XP_PER_REACTION = config.get('xp_per_reaction', DEFAULT_CONFIG['xp_per_reaction'])
+XP_PER_MINUTE_VC = config.get('xp_per_minute_vc', DEFAULT_CONFIG['xp_per_minute_vc'])
+MESSAGE_COOLDOWN = config.get('message_cooldown', DEFAULT_CONFIG['message_cooldown'])
 
 # In-memory tracking
 voice_join_times = {}  # Track when users join voice channels
