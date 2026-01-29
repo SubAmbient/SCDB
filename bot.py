@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Bot version
-BOT_VERSION = "0.0.2"
+BOT_VERSION = "0.0.3"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -315,8 +315,8 @@ async def rank(ctx, member: discord.Member = None):
     embed.add_field(name="Messages", value=user_data['messages'], inline=True)
     embed.add_field(name="Reactions", value=user_data['reactions'], inline=True)
 
-    # Format VC time (support both old vc_minutes and new vc_seconds)
-    vc_seconds = user_data.get('vc_seconds', user_data.get('vc_minutes', 0) * 60)
+    # Format VC time
+    vc_seconds = user_data.get('vc_seconds', 0)
     hours = vc_seconds // 3600
     minutes = (vc_seconds % 3600) // 60
     seconds = vc_seconds % 60
