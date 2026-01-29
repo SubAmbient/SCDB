@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Bot version
-BOT_VERSION = "0.0.1"
+BOT_VERSION = "0.0.2"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -262,8 +262,8 @@ async def check_voice_xp():
 
     for guild in bot.guilds:
         for voice_channel in guild.voice_channels:
-            # Count non-bot members in the channel
-            non_bot_members = [m for m in voice_channel.members if not m.bot]
+            # Count non-bot, non-muted members in the channel
+            non_bot_members = [m for m in voice_channel.members if not m.bot and not m.voice.self_mute and not m.voice.mute]
 
             # Skip if only one person (or no one) is in the channel
             if len(non_bot_members) <= 1:
