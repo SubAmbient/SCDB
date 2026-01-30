@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Bot version
-BOT_VERSION = "0.0.6"
+BOT_VERSION = "0.0.7"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -441,8 +441,13 @@ async def vc_partners(ctx, member: discord.Member = None):
 
 
 @bot.command(name='leaderboard')
-async def leaderboard(ctx, page: int = 1):
-    """Show the server leaderboard"""
+async def leaderboard(ctx, category: str = 'xp', page: int = 1):
+    """Show the server leaderboard
+
+    Categories: xp, level, messages, reactions, vc (voice chat time)
+    Usage: !leaderboard [category] [page]
+    Example: !leaderboard messages 1
+    """
     data = load_data()
     guild_data = data.get(str(ctx.guild.id), {})
 
@@ -450,8 +455,26 @@ async def leaderboard(ctx, page: int = 1):
         await ctx.send("No XP data available yet!")
         return
 
-    # Sort by XP
-    sorted_users = sorted(guild_data.items(), key=lambda x: x[1]['xp'], reverse=True)
+    # Validate and normalize category
+    category = category.lower()
+    valid_categories = {
+        'xp': ('xp', '🏆 XP', 'XP'),
+        'level': ('level', '⭐ Level', 'Level'),
+        'messages': ('messages', '💬 Messages', 'Messages'),
+        'reactions': ('reactions', '❤️ Reactions', 'Reactions'),
+        'vc': ('vc_seconds', '🎙️ Voice Time', 'Time'),
+        'vctime': ('vc_seconds', '🎙️ Voice Time', 'Time'),
+        'voice': ('vc_seconds', '🎙️ Voice Time', 'Time')
+    }
+
+    if category not in valid_categories:
+        await ctx.send(f"❌ Invalid category! Use: `xp`, `level`, `messages`, `reactions`, or `vc`")
+        return
+
+    sort_key, title_emoji, stat_name = valid_categories[category]
+
+    # Sort by selected category
+    sorted_users = sorted(guild_data.items(), key=lambda x: x[1].get(sort_key, 0), reverse=True)
 
     # Pagination
     per_page = 10
@@ -462,7 +485,7 @@ async def leaderboard(ctx, page: int = 1):
     end_idx = start_idx + per_page
 
     embed = discord.Embed(
-        title=f"🏆 {ctx.guild.name} Leaderboard",
+        title=f"{title_emoji} Leaderboard - {ctx.guild.name}",
         description=f"Page {page}/{total_pages}",
         color=discord.Color.gold()
     )
@@ -472,7 +495,7 @@ async def leaderboard(ctx, page: int = 1):
             member = await ctx.guild.fetch_member(int(user_id))
             name = member.display_name
         except:
-            name = f"User {user_id}"
+            name = user_data.get('username', f"User {user_id}")
 
         medal = ""
         if i == 1:
@@ -482,11 +505,33 @@ async def leaderboard(ctx, page: int = 1):
         elif i == 3:
             medal = "🥉 "
 
+        # Format the stat value based on category
+        stat_value = user_data.get(sort_key, 0)
+
+        if sort_key == 'vc_seconds':
+            # Format time
+            hours = stat_value // 3600
+            minutes = (stat_value % 3600) // 60
+            if hours > 0:
+                formatted_stat = f"{hours}h {minutes}m"
+            elif minutes > 0:
+                formatted_stat = f"{minutes}m"
+            else:
+                formatted_stat = f"{stat_value}s"
+            value_text = f"{formatted_stat} • Level {user_data['level']}"
+        else:
+            # Format numbers with commas
+            formatted_stat = f"{stat_value:,}"
+            value_text = f"{formatted_stat} {stat_name} • Level {user_data['level']}"
+
         embed.add_field(
             name=f"{medal}#{i} {name}",
-            value=f"Level {user_data['level']} • {user_data['xp']:,} XP",
+            value=value_text,
             inline=False
         )
+
+    # Add footer with available categories
+    embed.set_footer(text="Categories: xp, level, messages, reactions, vc")
 
     await ctx.send(embed=embed)
 
@@ -552,7 +597,8 @@ async def help_command(ctx):
         value=(
             "**!rank** `[@user]` - View your or someone else's rank and stats\n"
             "**!vcpartners** `[@user]` - See top voice channel partners\n"
-            "**!leaderboard** `[page]` - View the server XP leaderboard\n"
+            "**!leaderboard** `[category] [page]` - View server leaderboards\n"
+            "   Categories: `xp`, `level`, `messages`, `reactions`, `vc`\n"
             "**!version** - Display bot version information\n"
             "**!help** - Show this help message"
         ),
@@ -565,17 +611,6 @@ async def help_command(ctx):
         value=(
             "**!xpconfig** - View current XP configuration\n"
             "**!resetxp** `@user` - Reset a user's XP data"
-        ),
-        inline=False
-    )
-
-    # XP Information
-    embed.add_field(
-        name="💫 How to Earn XP",
-        value=(
-            f"• **Messages**: {XP_PER_MESSAGE} XP (cooldown: {MESSAGE_COOLDOWN}s)\n"
-            f"• **Reactions**: {XP_PER_REACTION} XP (for both giver and receiver)\n"
-            f"• **Voice Chat**: {XP_PER_MINUTE_VC} XP per minute (with 2+ unmuted users)"
         ),
         inline=False
     )
