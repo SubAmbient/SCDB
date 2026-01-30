@@ -559,27 +559,6 @@ async def help_command(ctx):
         inline=False
     )
 
-    # Admin Commands
-    embed.add_field(
-        name="⚙️ Admin Commands",
-        value=(
-            "**!xpconfig** - View current XP configuration\n"
-            "**!resetxp** `@user` - Reset a user's XP data"
-        ),
-        inline=False
-    )
-
-    # XP Information
-    embed.add_field(
-        name="💫 How to Earn XP",
-        value=(
-            f"• **Messages**: {XP_PER_MESSAGE} XP (cooldown: {MESSAGE_COOLDOWN}s)\n"
-            f"• **Reactions**: {XP_PER_REACTION} XP (for both giver and receiver)\n"
-            f"• **Voice Chat**: {XP_PER_MINUTE_VC} XP per minute (with 2+ unmuted users)"
-        ),
-        inline=False
-    )
-
     embed.set_footer(text=f"Bot Version: {BOT_VERSION}")
 
     await ctx.send(embed=embed)
