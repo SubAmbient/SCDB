@@ -166,25 +166,6 @@ async def send_levelup_message(guild, member, level, context_channel=None):
             break
 
 
-async def send_record_message(guild, member, session_duration, context_channel=None):
-    """Send a message when someone breaks their longest session record"""
-    formatted_time = format_time(session_duration)
-    message = f"🏆 {member.mention} just set a new personal record with a **{formatted_time}** voice session!"
-
-    # Try to send to configured channel first
-    if LEVELUP_CHANNEL_ID:
-        channel = guild.get_channel(LEVELUP_CHANNEL_ID)
-        if channel and channel.permissions_for(guild.me).send_messages:
-            await channel.send(message)
-            return
-
-    # Fallback to first available channel
-    for channel in guild.text_channels:
-        if channel.permissions_for(guild.me).send_messages:
-            await channel.send(message)
-            break
-
-
 @bot.event
 async def on_ready():
     print(f'Bot Version: {BOT_VERSION}')
@@ -325,21 +306,15 @@ async def on_voice_state_update(member, before, after):
             # Calculate session duration
             session_duration = int((datetime.now() - voice_session_starts[user_key]).total_seconds())
 
-            # Load data and check if this is a new record
+            # Load data and update longest session if needed
             data = load_data()
             user_data = get_user_data(data, member.guild.id, member.id, str(member))
 
             # Check if this session is longer than the current record
             if session_duration > user_data['longest_session']:
-                old_record = user_data['longest_session']
                 user_data['longest_session'] = session_duration
                 user_data['longest_session_date'] = datetime.now().isoformat()
                 save_data(data)
-
-                # Send a congratulatory message if they beat their old record by at least 60 seconds
-                # and the session was at least 5 minutes long
-                if session_duration >= 300 and (old_record == 0 or session_duration - old_record >= 60):
-                    await send_record_message(member.guild, member, session_duration)
 
             # Clean up tracking
             del voice_session_starts[user_key]
