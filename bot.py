@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Bot version
-BOT_VERSION = "0.0.3"
+BOT_VERSION = "0.0.4"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -38,6 +38,7 @@ DEFAULT_CONFIG = {
     'message_cooldown': 10
 }
 
+
 # Load or create config
 def load_config():
     """Load configuration from JSON file, create if doesn't exist"""
@@ -50,6 +51,7 @@ def load_config():
             json.dump(DEFAULT_CONFIG, f, indent=4)
         print(f"Created {CONFIG_FILE} with default values")
         return DEFAULT_CONFIG.copy()
+
 
 # Load configuration
 config = load_config()
@@ -197,17 +199,40 @@ async def on_message(message):
 
 
 @bot.event
-async def on_reaction_add(reaction, user):
-    """Award XP for adding reactions and receiving reactions"""
+async def on_raw_reaction_add(payload):
+    """Award XP for adding reactions and receiving reactions (works for all messages, not just cached)"""
     # Ignore bot reactions
-    if user.bot:
+    if payload.member and payload.member.bot:
         return
+
+    # Get guild
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
+
+    # Get the channel
+    channel = guild.get_channel(payload.channel_id)
+    if not channel:
+        return
+
+    # Fetch the message
+    try:
+        message = await channel.fetch_message(payload.message_id)
+    except discord.NotFound:
+        return
+    except discord.Forbidden:
+        return
+    except discord.HTTPException:
+        return
+
+    # Get the user who reacted
+    user = payload.member
 
     # Load data
     data = load_data()
 
     # Award XP to the person who added the reaction
-    user_data = get_user_data(data, reaction.message.guild.id, user.id, str(user))
+    user_data = get_user_data(data, guild.id, user.id, str(user))
 
     old_level = user_data['level']
     user_data['xp'] += XP_PER_REACTION
@@ -216,12 +241,11 @@ async def on_reaction_add(reaction, user):
 
     # Check for level up for the person who reacted
     if user_data['level'] > old_level:
-        await send_levelup_message(reaction.message.guild, user, user_data['level'], reaction.message.channel)
+        await send_levelup_message(guild, user, user_data['level'], channel)
 
     # Award XP to the message author (if they're not a bot and not reacting to their own message)
-    if not reaction.message.author.bot and reaction.message.author.id != user.id:
-        author_data = get_user_data(data, reaction.message.guild.id, reaction.message.author.id,
-                                    str(reaction.message.author))
+    if not message.author.bot and message.author.id != user.id:
+        author_data = get_user_data(data, guild.id, message.author.id, str(message.author))
 
         old_author_level = author_data['level']
         author_data['xp'] += XP_PER_REACTION
@@ -229,8 +253,7 @@ async def on_reaction_add(reaction, user):
 
         # Check for level up for the message author
         if author_data['level'] > old_author_level:
-            await send_levelup_message(reaction.message.guild, reaction.message.author, author_data['level'],
-                                       reaction.message.channel)
+            await send_levelup_message(guild, message.author, author_data['level'], channel)
 
     save_data(data)
 
@@ -263,7 +286,8 @@ async def check_voice_xp():
     for guild in bot.guilds:
         for voice_channel in guild.voice_channels:
             # Count non-bot, non-muted members in the channel
-            non_bot_members = [m for m in voice_channel.members if not m.bot and not m.voice.self_mute and not m.voice.mute]
+            non_bot_members = [m for m in voice_channel.members if
+                               not m.bot and not m.voice.self_mute and not m.voice.mute]
 
             # Skip if only one person (or no one) is in the channel
             if len(non_bot_members) <= 1:
