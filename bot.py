@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Bot version
-BOT_VERSION = "0.0.5"
+BOT_VERSION = "0.0.6"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -534,6 +534,54 @@ async def version(ctx):
     embed = discord.Embed(title="🤖 Bot Information", color=discord.Color.purple())
     embed.add_field(name="Version", value=BOT_VERSION, inline=True)
     embed.add_field(name="Bot Name", value=bot.user.name, inline=True)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='help')
+async def help_command(ctx):
+    """Display all available bot commands"""
+    embed = discord.Embed(
+        title="📚 Bot Commands",
+        description="Here are all the available commands:",
+        color=discord.Color.blue()
+    )
+
+    # User Commands
+    embed.add_field(
+        name="👤 User Commands",
+        value=(
+            "**!rank** `[@user]` - View your or someone else's rank and stats\n"
+            "**!vcpartners** `[@user]` - See top voice channel partners\n"
+            "**!leaderboard** `[page]` - View the server XP leaderboard\n"
+            "**!version** - Display bot version information\n"
+            "**!help** - Show this help message"
+        ),
+        inline=False
+    )
+
+    # Admin Commands
+    embed.add_field(
+        name="⚙️ Admin Commands",
+        value=(
+            "**!xpconfig** - View current XP configuration\n"
+            "**!resetxp** `@user` - Reset a user's XP data"
+        ),
+        inline=False
+    )
+
+    # XP Information
+    embed.add_field(
+        name="💫 How to Earn XP",
+        value=(
+            f"• **Messages**: {XP_PER_MESSAGE} XP (cooldown: {MESSAGE_COOLDOWN}s)\n"
+            f"• **Reactions**: {XP_PER_REACTION} XP (for both giver and receiver)\n"
+            f"• **Voice Chat**: {XP_PER_MINUTE_VC} XP per minute (with 2+ unmuted users)"
+        ),
+        inline=False
+    )
+
+    embed.set_footer(text=f"Bot Version: {BOT_VERSION}")
+
     await ctx.send(embed=embed)
 
 
