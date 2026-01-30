@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Bot version
-BOT_VERSION = "0.0.7"
+BOT_VERSION = "0.0.8"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -62,6 +62,7 @@ MESSAGE_COOLDOWN = config.get('message_cooldown', DEFAULT_CONFIG['message_cooldo
 
 # In-memory tracking
 voice_join_times = {}  # Track when users join voice channels
+voice_session_starts = {}  # Track session start time for longest session calculation
 message_cooldowns = {}  # Track message cooldowns per user
 
 
@@ -95,7 +96,9 @@ def get_user_data(data, guild_id, user_id, username=None):
             'messages': 0,
             'reactions': 0,
             'vc_seconds': 0,
-            'vc_partners': {}  # Track time with each voice channel partner
+            'vc_partners': {},  # Track time with each voice channel partner
+            'longest_session': 0,  # Longest single VC session in seconds
+            'longest_session_date': None  # When the longest session occurred
         }
     else:
         # Update username if provided (in case user changed their name)
@@ -105,6 +108,12 @@ def get_user_data(data, guild_id, user_id, username=None):
         # Ensure vc_partners exists for existing users
         if 'vc_partners' not in data[guild_id][user_id]:
             data[guild_id][user_id]['vc_partners'] = {}
+
+        # Ensure longest_session fields exist for existing users
+        if 'longest_session' not in data[guild_id][user_id]:
+            data[guild_id][user_id]['longest_session'] = 0
+        if 'longest_session_date' not in data[guild_id][user_id]:
+            data[guild_id][user_id]['longest_session_date'] = None
 
     return data[guild_id][user_id]
 
@@ -118,6 +127,20 @@ def calculate_level(xp):
 def xp_for_next_level(level):
     """Calculate XP needed for next level"""
     return (level ** 2) * 100
+
+
+def format_time(seconds):
+    """Format seconds into human-readable time string"""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+
+    if hours > 0:
+        return f"{hours}h {minutes}m {secs}s"
+    elif minutes > 0:
+        return f"{minutes}m {secs}s"
+    else:
+        return f"{secs}s"
 
 
 async def send_levelup_message(guild, member, level, context_channel=None):
@@ -143,6 +166,25 @@ async def send_levelup_message(guild, member, level, context_channel=None):
             break
 
 
+async def send_record_message(guild, member, session_duration, context_channel=None):
+    """Send a message when someone breaks their longest session record"""
+    formatted_time = format_time(session_duration)
+    message = f"🏆 {member.mention} just set a new personal record with a **{formatted_time}** voice session!"
+
+    # Try to send to configured channel first
+    if LEVELUP_CHANNEL_ID:
+        channel = guild.get_channel(LEVELUP_CHANNEL_ID)
+        if channel and channel.permissions_for(guild.me).send_messages:
+            await channel.send(message)
+            return
+
+    # Fallback to first available channel
+    for channel in guild.text_channels:
+        if channel.permissions_for(guild.me).send_messages:
+            await channel.send(message)
+            break
+
+
 @bot.event
 async def on_ready():
     print(f'Bot Version: {BOT_VERSION}')
@@ -161,6 +203,7 @@ async def on_ready():
                 if not member.bot:
                     user_key = f"{guild.id}_{member.id}"
                     voice_join_times[user_key] = datetime.now()
+                    voice_session_starts[user_key] = datetime.now()
 
     check_voice_xp.start()
 
@@ -265,7 +308,7 @@ async def on_raw_reaction_add(payload):
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    """Track voice channel join/leave times"""
+    """Track voice channel join/leave times and record longest sessions"""
     if member.bot:
         return
 
@@ -274,12 +317,34 @@ async def on_voice_state_update(member, before, after):
     # User joined a voice channel
     if before.channel is None and after.channel is not None:
         voice_join_times[user_key] = datetime.now()
+        voice_session_starts[user_key] = datetime.now()
 
     # User left a voice channel
     elif before.channel is not None and after.channel is None:
+        if user_key in voice_session_starts:
+            # Calculate session duration
+            session_duration = int((datetime.now() - voice_session_starts[user_key]).total_seconds())
+
+            # Load data and check if this is a new record
+            data = load_data()
+            user_data = get_user_data(data, member.guild.id, member.id, str(member))
+
+            # Check if this session is longer than the current record
+            if session_duration > user_data['longest_session']:
+                old_record = user_data['longest_session']
+                user_data['longest_session'] = session_duration
+                user_data['longest_session_date'] = datetime.now().isoformat()
+                save_data(data)
+
+                # Send a congratulatory message if they beat their old record by at least 60 seconds
+                # and the session was at least 5 minutes long
+                if session_duration >= 300 and (old_record == 0 or session_duration - old_record >= 60):
+                    await send_record_message(member.guild, member, session_duration)
+
+            # Clean up tracking
+            del voice_session_starts[user_key]
+
         if user_key in voice_join_times:
-            # The periodic task handles awarding XP for full minutes
-            # Just clean up the tracking
             del voice_join_times[user_key]
 
 
@@ -357,19 +422,14 @@ async def rank(ctx, member: discord.Member = None):
     embed.add_field(name="Reactions", value=user_data['reactions'], inline=True)
 
     # Format VC time
-    vc_seconds = user_data.get('vc_seconds', 0)
-    hours = vc_seconds // 3600
-    minutes = (vc_seconds % 3600) // 60
-    seconds = vc_seconds % 60
-
-    if hours > 0:
-        vc_time_str = f"{hours}h {minutes}m {seconds}s"
-    elif minutes > 0:
-        vc_time_str = f"{minutes}m {seconds}s"
-    else:
-        vc_time_str = f"{seconds}s"
-
+    vc_time_str = format_time(user_data.get('vc_seconds', 0))
     embed.add_field(name="VC Time", value=vc_time_str, inline=True)
+
+    # Add longest session info
+    longest_session = user_data.get('longest_session', 0)
+    if longest_session > 0:
+        longest_str = format_time(longest_session)
+        embed.add_field(name="🏆 Longest Session", value=longest_str, inline=True)
 
     await ctx.send(embed=embed)
 
@@ -400,17 +460,7 @@ async def vc_partners(ctx, member: discord.Member = None):
 
     # Show top 10 partners
     for i, (partner_id, partner_data) in enumerate(sorted_partners[:10], 1):
-        seconds = partner_data['seconds']
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        secs = seconds % 60
-
-        if hours > 0:
-            time_str = f"{hours}h {minutes}m"
-        elif minutes > 0:
-            time_str = f"{minutes}m {secs}s"
-        else:
-            time_str = f"{secs}s"
+        time_str = format_time(partner_data['seconds'])
 
         # Try to get the actual member for display name
         try:
@@ -444,9 +494,9 @@ async def vc_partners(ctx, member: discord.Member = None):
 async def leaderboard(ctx, category: str = 'xp', page: int = 1):
     """Show the server leaderboard
 
-    Categories: xp, level, messages, reactions, vc (voice chat time)
+    Categories: xp, level, messages, reactions, vc (voice chat time), session (longest session)
     Usage: !leaderboard [category] [page]
-    Example: !leaderboard messages 1
+    Example: !leaderboard session 1
     """
     data = load_data()
     guild_data = data.get(str(ctx.guild.id), {})
@@ -464,11 +514,13 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
         'reactions': ('reactions', '❤️ Reactions', 'Reactions'),
         'vc': ('vc_seconds', '🎙️ Voice Time', 'Time'),
         'vctime': ('vc_seconds', '🎙️ Voice Time', 'Time'),
-        'voice': ('vc_seconds', '🎙️ Voice Time', 'Time')
+        'voice': ('vc_seconds', '🎙️ Voice Time', 'Time'),
+        'session': ('longest_session', '⏱️ Longest Session', 'Session'),
+        'longest': ('longest_session', '⏱️ Longest Session', 'Session')
     }
 
     if category not in valid_categories:
-        await ctx.send(f"❌ Invalid category! Use: `xp`, `level`, `messages`, `reactions`, or `vc`")
+        await ctx.send(f"❌ Invalid category! Use: `xp`, `level`, `messages`, `reactions`, `vc`, or `session`")
         return
 
     sort_key, title_emoji, stat_name = valid_categories[category]
@@ -508,16 +560,9 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
         # Format the stat value based on category
         stat_value = user_data.get(sort_key, 0)
 
-        if sort_key == 'vc_seconds':
+        if sort_key in ['vc_seconds', 'longest_session']:
             # Format time
-            hours = stat_value // 3600
-            minutes = (stat_value % 3600) // 60
-            if hours > 0:
-                formatted_stat = f"{hours}h {minutes}m"
-            elif minutes > 0:
-                formatted_stat = f"{minutes}m"
-            else:
-                formatted_stat = f"{stat_value}s"
+            formatted_stat = format_time(stat_value)
             value_text = f"{formatted_stat} • Level {user_data['level']}"
         else:
             # Format numbers with commas
@@ -531,7 +576,7 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
         )
 
     # Add footer with available categories
-    embed.set_footer(text="Categories: xp, level, messages, reactions, vc")
+    embed.set_footer(text="Categories: xp, level, messages, reactions, vc, session")
 
     await ctx.send(embed=embed)
 
@@ -598,7 +643,7 @@ async def help_command(ctx):
             "**!rank** `[@user]` - View your or someone else's rank and stats\n"
             "**!vcpartners** `[@user]` - See top voice channel partners\n"
             "**!leaderboard** `[category] [page]` - View server leaderboards\n"
-            "   Categories: `xp`, `level`, `messages`, `reactions`, `vc`\n"
+            "   Categories: `xp`, `level`, `messages`, `reactions`, `vc`, `session`\n"
             "**!version** - Display bot version information\n"
             "**!help** - Show this help message"
         ),
