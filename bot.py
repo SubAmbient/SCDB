@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Bot version
-BOT_VERSION = "0.0.8"
+BOT_VERSION = "0.0.9"
 
 # Load environment variables from .env file
 load_dotenv()
