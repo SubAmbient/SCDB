@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Bot version
-BOT_VERSION = "0.0.4"
+BOT_VERSION = "0.0.5"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -94,12 +94,17 @@ def get_user_data(data, guild_id, user_id, username=None):
             'level': 1,
             'messages': 0,
             'reactions': 0,
-            'vc_seconds': 0
+            'vc_seconds': 0,
+            'vc_partners': {}  # Track time with each voice channel partner
         }
     else:
         # Update username if provided (in case user changed their name)
         if username:
             data[guild_id][user_id]['username'] = username
+
+        # Ensure vc_partners exists for existing users
+        if 'vc_partners' not in data[guild_id][user_id]:
+            data[guild_id][user_id]['vc_partners'] = {}
 
     return data[guild_id][user_id]
 
@@ -280,7 +285,7 @@ async def on_voice_state_update(member, before, after):
 
 @tasks.loop(minutes=1)
 async def check_voice_xp():
-    """Periodically award XP to users currently in voice channels"""
+    """Periodically award XP to users currently in voice channels and track partner time"""
     data = load_data()
 
     for guild in bot.guilds:
@@ -303,6 +308,18 @@ async def check_voice_xp():
                     user_data['xp'] += XP_PER_MINUTE_VC
                     user_data['vc_seconds'] += 60
                     user_data['level'] = calculate_level(user_data['xp'])
+
+                    # Track time with each partner in the voice channel
+                    for partner in non_bot_members:
+                        if partner.id != member.id:  # Don't track time with yourself
+                            partner_id = str(partner.id)
+                            if partner_id not in user_data['vc_partners']:
+                                user_data['vc_partners'][partner_id] = {
+                                    'username': str(partner),
+                                    'seconds': 0
+                                }
+                            user_data['vc_partners'][partner_id]['seconds'] += 60
+                            user_data['vc_partners'][partner_id]['username'] = str(partner)  # Update username
 
                     # Check for level up
                     if user_data['level'] > old_level:
@@ -353,6 +370,72 @@ async def rank(ctx, member: discord.Member = None):
         vc_time_str = f"{seconds}s"
 
     embed.add_field(name="VC Time", value=vc_time_str, inline=True)
+
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='vcpartners')
+async def vc_partners(ctx, member: discord.Member = None):
+    """Show who you've spent the most time with in voice channels"""
+    member = member or ctx.author
+
+    data = load_data()
+    user_data = get_user_data(data, ctx.guild.id, member.id)
+
+    vc_partners = user_data.get('vc_partners', {})
+
+    if not vc_partners:
+        await ctx.send(f"{member.display_name} hasn't spent time in voice channels with anyone yet!")
+        return
+
+    # Sort partners by time spent
+    sorted_partners = sorted(vc_partners.items(), key=lambda x: x[1]['seconds'], reverse=True)
+
+    embed = discord.Embed(
+        title=f"🎙️ {member.display_name}'s Voice Channel Partners",
+        description=f"Top people {member.display_name} has spent time with in voice channels",
+        color=discord.Color.purple()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    # Show top 10 partners
+    for i, (partner_id, partner_data) in enumerate(sorted_partners[:10], 1):
+        seconds = partner_data['seconds']
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+
+        if hours > 0:
+            time_str = f"{hours}h {minutes}m"
+        elif minutes > 0:
+            time_str = f"{minutes}m {secs}s"
+        else:
+            time_str = f"{secs}s"
+
+        # Try to get the actual member for display name
+        try:
+            partner_member = await ctx.guild.fetch_member(int(partner_id))
+            partner_name = partner_member.display_name
+        except:
+            partner_name = partner_data.get('username', f'User {partner_id}')
+
+        medal = ""
+        if i == 1:
+            medal = "🥇 "
+        elif i == 2:
+            medal = "🥈 "
+        elif i == 3:
+            medal = "🥉 "
+
+        embed.add_field(
+            name=f"{medal}#{i} {partner_name}",
+            value=f"⏱️ {time_str}",
+            inline=False
+        )
+
+    total_partners = len(vc_partners)
+    if total_partners > 10:
+        embed.set_footer(text=f"Showing top 10 of {total_partners} partners")
 
     await ctx.send(embed=embed)
 
