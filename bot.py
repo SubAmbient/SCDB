@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Bot version
-BOT_VERSION = "0.1.1"
+BOT_VERSION = "0.1.2"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -183,7 +183,7 @@ def create_leaderboard_embed(guild, guild_data):
             description="No XP data available yet!",
             color=discord.Color.gold()
         )
-        embed.set_footer(text=f"Updates every 5 seconds • Bot v{BOT_VERSION}")
+        embed.set_footer(text=f"Updates every 10 seconds • Bot v{BOT_VERSION}")
         return embed
 
     # Sort by XP
@@ -233,14 +233,14 @@ def create_leaderboard_embed(guild, guild_data):
 
     # Add timestamp
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    embed.set_footer(text=f"Last updated: {timestamp} • Updates every 5 seconds • Bot v{BOT_VERSION}")
+    embed.set_footer(text=f"Last updated: {timestamp} • Updates every 10 seconds • Bot v{BOT_VERSION}")
 
     return embed
 
 
-@tasks.loop(seconds=5)
+@tasks.loop(seconds=10)
 async def update_leaderboard():
-    """Update the leaderboard message every 5 seconds"""
+    """Update the leaderboard message every 10 seconds"""
     global leaderboard_message
 
     if not LEADERBOARD_CHANNEL_ID:
@@ -513,7 +513,7 @@ async def set_leaderboard(ctx):
     if not update_leaderboard.is_running():
         update_leaderboard.start()
 
-    await ctx.send(f"✅ Live leaderboard set to {ctx.channel.mention}! It will update every 5 seconds.")
+    await ctx.send(f"✅ Live leaderboard set to {ctx.channel.mention}! It will update every 10 seconds.")
 
     # Immediately post the first leaderboard
     data = load_data()
@@ -882,7 +882,7 @@ async def help_command(ctx):
         value=(
             "**!xpconfig** - View current XP configuration\n"
             "**!resetxp** `@user` - Reset a user's XP data\n"
-            "**!setleaderboard** - Set current channel as live leaderboard (updates every 5s)"
+            "**!setleaderboard** - Set current channel as live leaderboard (updates every 10s)"
         ),
         inline=False
     )
