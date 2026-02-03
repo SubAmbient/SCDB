@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Bot version
-BOT_VERSION = "0.1.0"
+BOT_VERSION = "0.1.1"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -522,6 +522,95 @@ async def set_leaderboard(ctx):
     leaderboard_message = await ctx.channel.send(embed=embed)
 
 
+@bot.command(name='profile')
+async def profile(ctx, member: discord.Member = None):
+    """Show comprehensive profile for yourself or another user"""
+    member = member or ctx.author
+
+    data = load_data()
+    user_data = get_user_data(data, ctx.guild.id, member.id)
+
+    # Calculate rank
+    guild_data = data.get(str(ctx.guild.id), {})
+    sorted_users = sorted(guild_data.items(), key=lambda x: x[1]['xp'], reverse=True)
+    rank = next((i + 1 for i, (uid, _) in enumerate(sorted_users) if uid == str(member.id)), 0)
+
+    # Calculate XP for next level
+    next_level_xp = xp_for_next_level(user_data['level'])
+    xp_progress = user_data['xp'] - xp_for_next_level(user_data['level'] - 1)
+    xp_needed = next_level_xp - xp_for_next_level(user_data['level'] - 1)
+    progress_percentage = int((xp_progress / xp_needed) * 100) if xp_needed > 0 else 100
+
+    # Create progress bar
+    bar_length = 10
+    filled = int((xp_progress / xp_needed) * bar_length) if xp_needed > 0 else bar_length
+    progress_bar = "█" * filled + "░" * (bar_length - filled)
+
+    embed = discord.Embed(
+        title=f"👤 {member.display_name}'s Profile",
+        color=discord.Color.blue()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    # Rank and Level section
+    embed.add_field(name="📊 Rank", value=f"#{rank}", inline=True)
+    embed.add_field(name="⭐ Level", value=user_data['level'], inline=True)
+    embed.add_field(name="🏆 Total XP", value=f"{user_data['xp']:,}", inline=True)
+
+    # Progress to next level
+    embed.add_field(
+        name="📈 Progress to Next Level",
+        value=f"{progress_bar} {progress_percentage}%\n{xp_progress:,}/{xp_needed:,} XP to Level {user_data['level'] + 1}",
+        inline=False
+    )
+
+    # Activity Stats
+    embed.add_field(name="💬 Messages", value=f"{user_data['messages']:,}", inline=True)
+    embed.add_field(name="❤️ Reactions", value=f"{user_data['reactions']:,}", inline=True)
+    embed.add_field(name="🎙️ VC Time", value=format_time(user_data.get('vc_seconds', 0)), inline=True)
+
+    # Longest session info
+    longest_session = user_data.get('longest_session', 0)
+    if longest_session > 0:
+        longest_str = format_time(longest_session)
+        session_date = user_data.get('longest_session_date')
+        if session_date:
+            try:
+                date_obj = datetime.fromisoformat(session_date)
+                date_str = date_obj.strftime("%Y-%m-%d")
+                embed.add_field(name="⏱️ Longest Session", value=f"{longest_str}\n({date_str})", inline=True)
+            except:
+                embed.add_field(name="⏱️ Longest Session", value=longest_str, inline=True)
+        else:
+            embed.add_field(name="⏱️ Longest Session", value=longest_str, inline=True)
+
+    # Top VC Partners
+    vc_partners = user_data.get('vc_partners', {})
+    if vc_partners:
+        sorted_partners = sorted(vc_partners.items(), key=lambda x: x[1]['seconds'], reverse=True)
+        top_3_partners = []
+
+        for partner_id, partner_data in sorted_partners[:3]:
+            time_str = format_time(partner_data['seconds'])
+            try:
+                partner_member = await ctx.guild.fetch_member(int(partner_id))
+                partner_name = partner_member.display_name
+            except:
+                partner_name = partner_data.get('username', f'User {partner_id}')
+
+            top_3_partners.append(f"**{partner_name}** - {time_str}")
+
+        embed.add_field(
+            name="🤝 Top VC Partners",
+            value="\n".join(top_3_partners) if top_3_partners else "No partners yet",
+            inline=False
+        )
+
+    embed.set_footer(text=f"Use !rank, !vcpartners, or !leaderboard for more details")
+
+    await ctx.send(embed=embed)
+
+
 @bot.command(name='rank')
 async def rank(ctx, member: discord.Member = None):
     """Check your or someone else's rank"""
@@ -776,6 +865,7 @@ async def help_command(ctx):
     embed.add_field(
         name="👤 User Commands",
         value=(
+            "**!profile** `[@user]` - View comprehensive profile with stats and progress\n"
             "**!rank** `[@user]` - View your or someone else's rank and stats\n"
             "**!vcpartners** `[@user]` - See top voice channel partners\n"
             "**!leaderboard** `[category] [page]` - View server leaderboards\n"
