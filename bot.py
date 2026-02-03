@@ -2,11 +2,12 @@
 from discord.ext import commands, tasks
 import json
 import os
+import asyncio
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Bot version
-BOT_VERSION = "0.0.9"
+BOT_VERSION = "0.1.0"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -15,6 +16,11 @@ load_dotenv()
 LEVELUP_CHANNEL_ID = os.getenv('LEVELUP_CHANNEL_ID')
 if LEVELUP_CHANNEL_ID:
     LEVELUP_CHANNEL_ID = int(LEVELUP_CHANNEL_ID)
+
+# Get leaderboard channel ID from environment (optional)
+LEADERBOARD_CHANNEL_ID = os.getenv('LEADERBOARD_CHANNEL_ID')
+if LEADERBOARD_CHANNEL_ID:
+    LEADERBOARD_CHANNEL_ID = int(LEADERBOARD_CHANNEL_ID)
 
 # Bot configuration
 INTENTS = discord.Intents.default()
@@ -37,6 +43,9 @@ DEFAULT_CONFIG = {
     'xp_per_minute_vc': 2,
     'message_cooldown': 10
 }
+
+# Store the leaderboard message ID for updating
+leaderboard_message = None
 
 
 # Load or create config
@@ -166,6 +175,118 @@ async def send_levelup_message(guild, member, level, context_channel=None):
             break
 
 
+def create_leaderboard_embed(guild, guild_data):
+    """Create the leaderboard embed"""
+    if not guild_data:
+        embed = discord.Embed(
+            title=f"🏆 {guild.name} - Live Leaderboard",
+            description="No XP data available yet!",
+            color=discord.Color.gold()
+        )
+        embed.set_footer(text=f"Updates every 5 seconds • Bot v{BOT_VERSION}")
+        return embed
+
+    # Sort by XP
+    sorted_users = sorted(guild_data.items(), key=lambda x: x[1].get('xp', 0), reverse=True)
+
+    embed = discord.Embed(
+        title=f"🏆 {guild.name} - Live Leaderboard",
+        description="Top 10 Members by XP",
+        color=discord.Color.gold()
+    )
+
+    # Show top 10 users
+    for i, (user_id, user_data) in enumerate(sorted_users[:10], 1):
+        try:
+            # Try to get member from cache
+            member = guild.get_member(int(user_id))
+            if member:
+                name = member.display_name
+            else:
+                name = user_data.get('username', f"User {user_id}")
+        except:
+            name = user_data.get('username', f"User {user_id}")
+
+        medal = ""
+        if i == 1:
+            medal = "🥇 "
+        elif i == 2:
+            medal = "🥈 "
+        elif i == 3:
+            medal = "🥉 "
+
+        xp = user_data.get('xp', 0)
+        level = user_data.get('level', 1)
+        messages = user_data.get('messages', 0)
+        vc_time = format_time(user_data.get('vc_seconds', 0))
+
+        value_text = (
+            f"**Level {level}** • {xp:,} XP\n"
+            f"💬 {messages:,} msgs • 🎙️ {vc_time}"
+        )
+
+        embed.add_field(
+            name=f"{medal}#{i} {name}",
+            value=value_text,
+            inline=False
+        )
+
+    # Add timestamp
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    embed.set_footer(text=f"Last updated: {timestamp} • Updates every 5 seconds • Bot v{BOT_VERSION}")
+
+    return embed
+
+
+@tasks.loop(seconds=5)
+async def update_leaderboard():
+    """Update the leaderboard message every 5 seconds"""
+    global leaderboard_message
+
+    if not LEADERBOARD_CHANNEL_ID:
+        return
+
+    # Load current data
+    data = load_data()
+
+    for guild in bot.guilds:
+        channel = guild.get_channel(LEADERBOARD_CHANNEL_ID)
+        if not channel:
+            continue
+
+        if not channel.permissions_for(guild.me).send_messages:
+            continue
+
+        guild_data = data.get(str(guild.id), {})
+        embed = create_leaderboard_embed(guild, guild_data)
+
+        try:
+            # If we don't have a message yet, create one
+            if leaderboard_message is None:
+                # Check if there's an existing message by searching recent messages
+                async for msg in channel.history(limit=10):
+                    if msg.author == bot.user and msg.embeds and "Live Leaderboard" in msg.embeds[0].title:
+                        leaderboard_message = msg
+                        break
+
+                # If still no message, create a new one
+                if leaderboard_message is None:
+                    leaderboard_message = await channel.send(embed=embed)
+                else:
+                    await leaderboard_message.edit(embed=embed)
+            else:
+                # Update existing message
+                await leaderboard_message.edit(embed=embed)
+
+        except discord.NotFound:
+            # Message was deleted, create a new one
+            leaderboard_message = await channel.send(embed=embed)
+        except discord.HTTPException as e:
+            print(f"Error updating leaderboard: {e}")
+            # If we hit rate limits or other errors, wait a bit
+            await asyncio.sleep(5)
+
+
 @bot.event
 async def on_ready():
     print(f'Bot Version: {BOT_VERSION}')
@@ -177,6 +298,11 @@ async def on_ready():
     else:
         print('No level-up channel configured - messages will be sent in context channel')
 
+    if LEADERBOARD_CHANNEL_ID:
+        print(f'Live leaderboard will be posted in channel ID: {LEADERBOARD_CHANNEL_ID}')
+    else:
+        print('No leaderboard channel configured - use !setleaderboard to set one')
+
     # Initialize voice_join_times for users already in voice channels
     for guild in bot.guilds:
         for voice_channel in guild.voice_channels:
@@ -187,6 +313,10 @@ async def on_ready():
                     voice_session_starts[user_key] = datetime.now()
 
     check_voice_xp.start()
+
+    # Start the leaderboard update task if channel is configured
+    if LEADERBOARD_CHANNEL_ID:
+        update_leaderboard.start()
 
 
 @bot.event
@@ -366,6 +496,30 @@ async def check_voice_xp():
                         await send_levelup_message(guild, member, user_data['level'])
 
     save_data(data)
+
+
+@bot.command(name='setleaderboard')
+@commands.has_permissions(administrator=True)
+async def set_leaderboard(ctx):
+    """Set the current channel as the live leaderboard channel (Admin only)"""
+    global leaderboard_message, LEADERBOARD_CHANNEL_ID
+
+    LEADERBOARD_CHANNEL_ID = ctx.channel.id
+
+    # Clear old message reference
+    leaderboard_message = None
+
+    # Start the update task if not already running
+    if not update_leaderboard.is_running():
+        update_leaderboard.start()
+
+    await ctx.send(f"✅ Live leaderboard set to {ctx.channel.mention}! It will update every 5 seconds.")
+
+    # Immediately post the first leaderboard
+    data = load_data()
+    guild_data = data.get(str(ctx.guild.id), {})
+    embed = create_leaderboard_embed(ctx.guild, guild_data)
+    leaderboard_message = await ctx.channel.send(embed=embed)
 
 
 @bot.command(name='rank')
@@ -574,6 +728,13 @@ async def xp_config(ctx):
     else:
         embed.add_field(name="Level-up Channel", value="Context Channel (Not Configured)", inline=True)
 
+    if LEADERBOARD_CHANNEL_ID:
+        channel = ctx.guild.get_channel(LEADERBOARD_CHANNEL_ID)
+        channel_name = channel.mention if channel else f"ID: {LEADERBOARD_CHANNEL_ID} (Not Found)"
+        embed.add_field(name="Live Leaderboard Channel", value=channel_name, inline=True)
+    else:
+        embed.add_field(name="Live Leaderboard Channel", value="Not Configured", inline=True)
+
     await ctx.send(embed=embed)
 
 
@@ -630,7 +791,8 @@ async def help_command(ctx):
         name="⚙️ Admin Commands",
         value=(
             "**!xpconfig** - View current XP configuration\n"
-            "**!resetxp** `@user` - Reset a user's XP data"
+            "**!resetxp** `@user` - Reset a user's XP data\n"
+            "**!setleaderboard** - Set current channel as live leaderboard (updates every 5s)"
         ),
         inline=False
     )
