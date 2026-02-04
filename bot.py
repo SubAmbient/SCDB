@@ -191,12 +191,12 @@ def create_leaderboard_embed(guild, guild_data):
 
     embed = discord.Embed(
         title=f"🏆 {guild.name} - Live Leaderboard",
-        description="Top 10 Members by XP",
+        description=f"All Members by XP ({len(sorted_users)} total)",
         color=discord.Color.gold()
     )
 
-    # Show top 10 users
-    for i, (user_id, user_data) in enumerate(sorted_users[:10], 1):
+    # Show all users
+    for i, (user_id, user_data) in enumerate(sorted_users, 1):
         try:
             # Try to get member from cache
             member = guild.get_member(int(user_id))
@@ -264,7 +264,7 @@ async def update_leaderboard():
             # If we don't have a message yet, create one
             if leaderboard_message is None:
                 # Check if there's an existing message by searching recent messages
-                async for msg in channel.history(limit=10):
+                async for msg in channel.history(limit=1):
                     if msg.author == bot.user and msg.embeds and "Live Leaderboard" in msg.embeds[0].title:
                         leaderboard_message = msg
                         break
