@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import hashlib
 
 # Bot version
-BOT_VERSION = "0.2.1"
+BOT_VERSION = "0.2.2"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -556,12 +556,17 @@ async def set_leaderboard(ctx):
     guild_data = data.get(str(ctx.guild.id), {})
     embed = create_leaderboard_embed(ctx.guild, guild_data)
 
-    response_time = (time.perf_counter() - start_time) * 1000
+    # Send initial response message
+    response_msg = await ctx.send(
+        f"✅ Live leaderboard set to {ctx.channel.mention}! It will update every 10 seconds.\n⚡ Calculating...")
 
-    await ctx.send(
-        f"✅ Live leaderboard set to {ctx.channel.mention}! It will update every 10 seconds.\n⚡ {response_time:.0f}ms")
-
+    # Send the leaderboard
     leaderboard_message = await ctx.channel.send(embed=embed)
+
+    # Calculate total response time and update the message
+    response_time = (time.perf_counter() - start_time) * 1000
+    await response_msg.edit(
+        content=f"✅ Live leaderboard set to {ctx.channel.mention}! It will update every 10 seconds.\n⚡ {response_time:.0f}ms")
 
 
 @bot.command(name='profile')
@@ -647,10 +652,15 @@ async def profile(ctx, member: discord.Member = None):
             inline=False
         )
 
-    response_time = (time.perf_counter() - start_time) * 1000
-    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
+    embed.set_footer(text="⚡ Calculating...")
 
-    await ctx.send(embed=embed)
+    # Send message and measure total time
+    message = await ctx.send(embed=embed)
+    response_time = (time.perf_counter() - start_time) * 1000
+
+    # Update footer with actual response time
+    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
+    await message.edit(embed=embed)
 
 
 @bot.command(name='rank')
@@ -691,10 +701,15 @@ async def rank(ctx, member: discord.Member = None):
         longest_str = format_time(longest_session)
         embed.add_field(name="🏆 Longest Session", value=longest_str, inline=True)
 
-    response_time = (time.perf_counter() - start_time) * 1000
-    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
+    embed.set_footer(text="⚡ Calculating...")
 
-    await ctx.send(embed=embed)
+    # Send message and measure total time
+    message = await ctx.send(embed=embed)
+    response_time = (time.perf_counter() - start_time) * 1000
+
+    # Update footer with actual response time
+    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
+    await message.edit(embed=embed)
 
 
 @bot.command(name='vcpartners')
@@ -709,7 +724,10 @@ async def vc_partners(ctx, member: discord.Member = None):
     vc_partners = user_data.get('vc_partners', {})
 
     if not vc_partners:
-        await ctx.send(f"{member.display_name} hasn't spent time in voice channels with anyone yet!")
+        message = await ctx.send(f"{member.display_name} hasn't spent time in voice channels with anyone yet!")
+        response_time = (time.perf_counter() - start_time) * 1000
+        await message.edit(
+            content=f"{member.display_name} hasn't spent time in voice channels with anyone yet!\n⚡ {response_time:.0f}ms")
         return
 
     # Sort partners by time spent
@@ -746,15 +764,22 @@ async def vc_partners(ctx, member: discord.Member = None):
         )
 
     total_partners = len(vc_partners)
-    response_time = (time.perf_counter() - start_time) * 1000
-
-    footer_text = f"⚡ {response_time:.0f}ms"
+    footer_text = "⚡ Calculating..."
     if total_partners > 10:
         footer_text = f"Showing top 10 of {total_partners} partners • {footer_text}"
 
     embed.set_footer(text=footer_text)
 
-    await ctx.send(embed=embed)
+    # Send message and measure total time
+    message = await ctx.send(embed=embed)
+    response_time = (time.perf_counter() - start_time) * 1000
+
+    # Update footer with actual response time
+    footer_text = f"⚡ {response_time:.0f}ms"
+    if total_partners > 10:
+        footer_text = f"Showing top 10 of {total_partners} partners • {footer_text}"
+    embed.set_footer(text=footer_text)
+    await message.edit(embed=embed)
 
 
 @bot.command(name='leaderboard')
@@ -841,11 +866,16 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
             inline=False
         )
 
-    # Add footer with available categories and response time
-    response_time = (time.perf_counter() - start_time) * 1000
-    embed.set_footer(text=f"Categories: xp, level, messages, reactions, vc, session • ⚡ {response_time:.0f}ms")
+    # Add footer with available categories
+    embed.set_footer(text=f"Categories: xp, level, messages, reactions, vc, session • ⚡ Calculating...")
 
-    await ctx.send(embed=embed)
+    # Send message and measure total time
+    message = await ctx.send(embed=embed)
+    response_time = (time.perf_counter() - start_time) * 1000
+
+    # Update footer with actual response time
+    embed.set_footer(text=f"Categories: xp, level, messages, reactions, vc, session • ⚡ {response_time:.0f}ms")
+    await message.edit(embed=embed)
 
 
 @bot.command(name='xpconfig')
@@ -875,10 +905,15 @@ async def xp_config(ctx):
     else:
         embed.add_field(name="Live Leaderboard Channel", value="Not Configured", inline=True)
 
-    response_time = (time.perf_counter() - start_time) * 1000
-    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
+    embed.set_footer(text="⚡ Calculating...")
 
-    await ctx.send(embed=embed)
+    # Send message and measure total time
+    message = await ctx.send(embed=embed)
+    response_time = (time.perf_counter() - start_time) * 1000
+
+    # Update footer with actual response time
+    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
+    await message.edit(embed=embed)
 
 
 @bot.command(name='resetxp')
@@ -894,11 +929,13 @@ async def reset_xp(ctx, member: discord.Member):
     if guild_id in data and user_id in data[guild_id]:
         del data[guild_id][user_id]
         save_data(data)
+        message = await ctx.send(f"✅ Reset XP for {member.display_name}\n⚡ Calculating...")
         response_time = (time.perf_counter() - start_time) * 1000
-        await ctx.send(f"✅ Reset XP for {member.display_name}\n⚡ {response_time:.0f}ms")
+        await message.edit(content=f"✅ Reset XP for {member.display_name}\n⚡ {response_time:.0f}ms")
     else:
+        message = await ctx.send(f"❌ No XP data found for {member.display_name}\n⚡ Calculating...")
         response_time = (time.perf_counter() - start_time) * 1000
-        await ctx.send(f"❌ No XP data found for {member.display_name}\n⚡ {response_time:.0f}ms")
+        await message.edit(content=f"❌ No XP data found for {member.display_name}\n⚡ {response_time:.0f}ms")
 
 
 @bot.command(name='version')
@@ -910,10 +947,15 @@ async def version(ctx):
     embed.add_field(name="Version", value=BOT_VERSION, inline=True)
     embed.add_field(name="Bot Name", value=bot.user.name, inline=True)
 
-    response_time = (time.perf_counter() - start_time) * 1000
-    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
+    embed.set_footer(text="⚡ Calculating...")
 
-    await ctx.send(embed=embed)
+    # Send message and measure total time
+    message = await ctx.send(embed=embed)
+    response_time = (time.perf_counter() - start_time) * 1000
+
+    # Update footer with actual response time
+    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
+    await message.edit(embed=embed)
 
 
 @bot.command(name='help')
@@ -953,10 +995,15 @@ async def help_command(ctx):
         inline=False
     )
 
-    response_time = (time.perf_counter() - start_time) * 1000
-    embed.set_footer(text=f"Bot Version: {BOT_VERSION} • ⚡ {response_time:.0f}ms")
+    embed.set_footer(text=f"Bot Version: {BOT_VERSION} • ⚡ Calculating...")
 
-    await ctx.send(embed=embed)
+    # Send message and measure total time
+    message = await ctx.send(embed=embed)
+    response_time = (time.perf_counter() - start_time) * 1000
+
+    # Update footer with actual response time
+    embed.set_footer(text=f"Bot Version: {BOT_VERSION} • ⚡ {response_time:.0f}ms")
+    await message.edit(embed=embed)
 
 
 if __name__ == '__main__':
