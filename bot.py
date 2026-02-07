@@ -6,9 +6,10 @@ import asyncio
 import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import hashlib
 
 # Bot version
-BOT_VERSION = "0.1.3"
+BOT_VERSION = "0.2.1"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -47,6 +48,10 @@ DEFAULT_CONFIG = {
 
 # Store the leaderboard message ID for updating
 leaderboard_message = None
+
+# Cache for rank calculations
+_rank_cache = {}
+_rank_cache_hash = None
 
 
 # Load or create config
@@ -128,6 +133,27 @@ def get_user_data(data, guild_id, user_id, username=None):
     return data[guild_id][user_id]
 
 
+def get_cached_rank(guild_id, user_id, guild_data):
+    """Get rank with caching to avoid repeated sorting"""
+    global _rank_cache, _rank_cache_hash
+
+    guild_id = str(guild_id)
+    user_id = str(user_id)
+
+    # Create hash of current data for this guild
+    data_hash = hashlib.md5(json.dumps(guild_data, sort_keys=True).encode()).hexdigest()
+
+    # If data changed, invalidate cache and rebuild
+    if data_hash != _rank_cache_hash:
+        _rank_cache = {}
+        _rank_cache_hash = data_hash
+        sorted_users = sorted(guild_data.items(), key=lambda x: x[1].get('xp', 0), reverse=True)
+        for i, (uid, _) in enumerate(sorted_users, 1):
+            _rank_cache[uid] = i
+
+    return _rank_cache.get(user_id, 0)
+
+
 def calculate_level(xp):
     """Calculate level based on XP (simple formula: level = sqrt(xp/100))"""
     import math
@@ -198,15 +224,9 @@ def create_leaderboard_embed(guild, guild_data):
 
     # Show all users
     for i, (user_id, user_data) in enumerate(sorted_users, 1):
-        try:
-            # Try to get member from cache
-            member = guild.get_member(int(user_id))
-            if member:
-                name = member.display_name
-            else:
-                name = user_data.get('username', f"User {user_id}")
-        except:
-            name = user_data.get('username', f"User {user_id}")
+        # Use cached member lookup (no API call)
+        member = guild.get_member(int(user_id))
+        name = member.display_name if member else user_data.get('username', f"User {user_id}")
 
         medal = ""
         if i == 1:
@@ -304,6 +324,15 @@ async def on_ready():
     else:
         print('No leaderboard channel configured - use !setleaderboard to set one')
 
+    # Cache all members from all guilds
+    print('Caching members from all guilds...')
+    total_members = 0
+    for guild in bot.guilds:
+        # Fetch all members to populate the cache
+        async for member in guild.fetch_members(limit=None):
+            total_members += 1
+    print(f'Cached {total_members} members across {len(bot.guilds)} guilds')
+
     # Initialize voice_join_times for users already in voice channels
     for guild in bot.guilds:
         for voice_channel in guild.voice_channels:
@@ -318,6 +347,13 @@ async def on_ready():
     # Start the leaderboard update task if channel is configured
     if LEADERBOARD_CHANNEL_ID:
         update_leaderboard.start()
+
+
+@bot.event
+async def on_member_join(member):
+    """Cache member when they join the server"""
+    # Member is automatically added to cache by discord.py, but we can log it
+    print(f'New member joined and cached: {member} in {member.guild.name}')
 
 
 @bot.event
@@ -537,10 +573,9 @@ async def profile(ctx, member: discord.Member = None):
     data = load_data()
     user_data = get_user_data(data, ctx.guild.id, member.id)
 
-    # Calculate rank
+    # Calculate rank using cached function
     guild_data = data.get(str(ctx.guild.id), {})
-    sorted_users = sorted(guild_data.items(), key=lambda x: x[1]['xp'], reverse=True)
-    rank = next((i + 1 for i, (uid, _) in enumerate(sorted_users) if uid == str(member.id)), 0)
+    rank = get_cached_rank(ctx.guild.id, member.id, guild_data)
 
     # Calculate XP for next level
     next_level_xp = xp_for_next_level(user_data['level'])
@@ -591,7 +626,7 @@ async def profile(ctx, member: discord.Member = None):
         else:
             embed.add_field(name="⏱️ Longest Session", value=longest_str, inline=True)
 
-    # Top VC Partners
+    # Top VC Partners - Use cached member lookup
     vc_partners = user_data.get('vc_partners', {})
     if vc_partners:
         sorted_partners = sorted(vc_partners.items(), key=lambda x: x[1]['seconds'], reverse=True)
@@ -599,11 +634,10 @@ async def profile(ctx, member: discord.Member = None):
 
         for partner_id, partner_data in sorted_partners[:3]:
             time_str = format_time(partner_data['seconds'])
-            try:
-                partner_member = await ctx.guild.fetch_member(int(partner_id))
-                partner_name = partner_member.display_name
-            except:
-                partner_name = partner_data.get('username', f'User {partner_id}')
+            # Use cached member lookup instead of fetch
+            partner_member = ctx.guild.get_member(int(partner_id))
+            partner_name = partner_member.display_name if partner_member else partner_data.get('username',
+                                                                                               f'User {partner_id}')
 
             top_3_partners.append(f"**{partner_name}** - {time_str}")
 
@@ -628,10 +662,9 @@ async def rank(ctx, member: discord.Member = None):
     data = load_data()
     user_data = get_user_data(data, ctx.guild.id, member.id)
 
-    # Calculate rank
+    # Calculate rank using cached function
     guild_data = data.get(str(ctx.guild.id), {})
-    sorted_users = sorted(guild_data.items(), key=lambda x: x[1]['xp'], reverse=True)
-    rank = next((i + 1 for i, (uid, _) in enumerate(sorted_users) if uid == str(member.id)), 0)
+    rank = get_cached_rank(ctx.guild.id, member.id, guild_data)
 
     # Calculate XP for next level
     next_level_xp = xp_for_next_level(user_data['level'])
@@ -693,12 +726,10 @@ async def vc_partners(ctx, member: discord.Member = None):
     for i, (partner_id, partner_data) in enumerate(sorted_partners[:10], 1):
         time_str = format_time(partner_data['seconds'])
 
-        # Try to get the actual member for display name
-        try:
-            partner_member = await ctx.guild.fetch_member(int(partner_id))
-            partner_name = partner_member.display_name
-        except:
-            partner_name = partner_data.get('username', f'User {partner_id}')
+        # Use cached member lookup instead of fetch
+        partner_member = ctx.guild.get_member(int(partner_id))
+        partner_name = partner_member.display_name if partner_member else partner_data.get('username',
+                                                                                           f'User {partner_id}')
 
         medal = ""
         if i == 1:
@@ -780,11 +811,9 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
     )
 
     for i, (user_id, user_data) in enumerate(sorted_users[start_idx:end_idx], start=start_idx + 1):
-        try:
-            member = await ctx.guild.fetch_member(int(user_id))
-            name = member.display_name
-        except:
-            name = user_data.get('username', f"User {user_id}")
+        # Use cached member lookup instead of fetch
+        member = ctx.guild.get_member(int(user_id))
+        name = member.display_name if member else user_data.get('username', f"User {user_id}")
 
         medal = ""
         if i == 1:
