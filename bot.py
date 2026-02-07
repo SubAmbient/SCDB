@@ -523,7 +523,7 @@ async def set_leaderboard(ctx):
     response_time = (time.perf_counter() - start_time) * 1000
 
     await ctx.send(
-        f"✅ Live leaderboard set to {ctx.channel.mention}! It will update every 10 seconds.\n⚡ Response time: {response_time:.0f}ms")
+        f"✅ Live leaderboard set to {ctx.channel.mention}! It will update every 10 seconds.\n⚡ {response_time:.0f}ms")
 
     leaderboard_message = await ctx.channel.send(embed=embed)
 
@@ -614,7 +614,7 @@ async def profile(ctx, member: discord.Member = None):
         )
 
     response_time = (time.perf_counter() - start_time) * 1000
-    embed.set_footer(text=f"⚡ Response time: {response_time:.0f}ms")
+    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
 
     await ctx.send(embed=embed)
 
@@ -659,7 +659,7 @@ async def rank(ctx, member: discord.Member = None):
         embed.add_field(name="🏆 Longest Session", value=longest_str, inline=True)
 
     response_time = (time.perf_counter() - start_time) * 1000
-    embed.set_footer(text=f"⚡ Response time: {response_time:.0f}ms")
+    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
 
     await ctx.send(embed=embed)
 
@@ -717,7 +717,7 @@ async def vc_partners(ctx, member: discord.Member = None):
     total_partners = len(vc_partners)
     response_time = (time.perf_counter() - start_time) * 1000
 
-    footer_text = f"⚡ Response time: {response_time:.0f}ms"
+    footer_text = f"⚡ {response_time:.0f}ms"
     if total_partners > 10:
         footer_text = f"Showing top 10 of {total_partners} partners • {footer_text}"
 
@@ -847,7 +847,7 @@ async def xp_config(ctx):
         embed.add_field(name="Live Leaderboard Channel", value="Not Configured", inline=True)
 
     response_time = (time.perf_counter() - start_time) * 1000
-    embed.set_footer(text=f"⚡ Response time: {response_time:.0f}ms")
+    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
 
     await ctx.send(embed=embed)
 
@@ -866,10 +866,10 @@ async def reset_xp(ctx, member: discord.Member):
         del data[guild_id][user_id]
         save_data(data)
         response_time = (time.perf_counter() - start_time) * 1000
-        await ctx.send(f"✅ Reset XP for {member.display_name}\n⚡ Response time: {response_time:.0f}ms")
+        await ctx.send(f"✅ Reset XP for {member.display_name}\n⚡ {response_time:.0f}ms")
     else:
         response_time = (time.perf_counter() - start_time) * 1000
-        await ctx.send(f"❌ No XP data found for {member.display_name}\n⚡ Response time: {response_time:.0f}ms")
+        await ctx.send(f"❌ No XP data found for {member.display_name}\n⚡ {response_time:.0f}ms")
 
 
 @bot.command(name='version')
@@ -882,7 +882,7 @@ async def version(ctx):
     embed.add_field(name="Bot Name", value=bot.user.name, inline=True)
 
     response_time = (time.perf_counter() - start_time) * 1000
-    embed.set_footer(text=f"⚡ Response time: {response_time:.0f}ms")
+    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
 
     await ctx.send(embed=embed)
 
@@ -925,7 +925,7 @@ async def help_command(ctx):
     )
 
     response_time = (time.perf_counter() - start_time) * 1000
-    embed.set_footer(text=f"Bot Version: {BOT_VERSION} • ⚡ Response time: {response_time:.0f}ms")
+    embed.set_footer(text=f"Bot Version: {BOT_VERSION} • ⚡ {response_time:.0f}ms")
 
     await ctx.send(embed=embed)
 
