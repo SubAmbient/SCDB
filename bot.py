@@ -3,11 +3,12 @@ from discord.ext import commands, tasks
 import json
 import os
 import asyncio
+import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Bot version
-BOT_VERSION = "0.1.2"
+BOT_VERSION = "0.1.3"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -502,6 +503,7 @@ async def check_voice_xp():
 @commands.has_permissions(administrator=True)
 async def set_leaderboard(ctx):
     """Set the current channel as the live leaderboard channel (Admin only)"""
+    start_time = time.perf_counter()
     global leaderboard_message, LEADERBOARD_CHANNEL_ID
 
     LEADERBOARD_CHANNEL_ID = ctx.channel.id
@@ -513,18 +515,23 @@ async def set_leaderboard(ctx):
     if not update_leaderboard.is_running():
         update_leaderboard.start()
 
-    await ctx.send(f"✅ Live leaderboard set to {ctx.channel.mention}! It will update every 10 seconds.")
-
     # Immediately post the first leaderboard
     data = load_data()
     guild_data = data.get(str(ctx.guild.id), {})
     embed = create_leaderboard_embed(ctx.guild, guild_data)
+
+    response_time = (time.perf_counter() - start_time) * 1000
+
+    await ctx.send(
+        f"✅ Live leaderboard set to {ctx.channel.mention}! It will update every 10 seconds.\n⚡ Response time: {response_time:.0f}ms")
+
     leaderboard_message = await ctx.channel.send(embed=embed)
 
 
 @bot.command(name='profile')
 async def profile(ctx, member: discord.Member = None):
     """Show comprehensive profile for yourself or another user"""
+    start_time = time.perf_counter()
     member = member or ctx.author
 
     data = load_data()
@@ -606,7 +613,8 @@ async def profile(ctx, member: discord.Member = None):
             inline=False
         )
 
-    embed.set_footer(text=f"Use !rank, !vcpartners, or !leaderboard for more details")
+    response_time = (time.perf_counter() - start_time) * 1000
+    embed.set_footer(text=f"⚡ Response time: {response_time:.0f}ms")
 
     await ctx.send(embed=embed)
 
@@ -614,6 +622,7 @@ async def profile(ctx, member: discord.Member = None):
 @bot.command(name='rank')
 async def rank(ctx, member: discord.Member = None):
     """Check your or someone else's rank"""
+    start_time = time.perf_counter()
     member = member or ctx.author
 
     data = load_data()
@@ -649,12 +658,16 @@ async def rank(ctx, member: discord.Member = None):
         longest_str = format_time(longest_session)
         embed.add_field(name="🏆 Longest Session", value=longest_str, inline=True)
 
+    response_time = (time.perf_counter() - start_time) * 1000
+    embed.set_footer(text=f"⚡ Response time: {response_time:.0f}ms")
+
     await ctx.send(embed=embed)
 
 
 @bot.command(name='vcpartners')
 async def vc_partners(ctx, member: discord.Member = None):
     """Show who you've spent the most time with in voice channels"""
+    start_time = time.perf_counter()
     member = member or ctx.author
 
     data = load_data()
@@ -702,8 +715,13 @@ async def vc_partners(ctx, member: discord.Member = None):
         )
 
     total_partners = len(vc_partners)
+    response_time = (time.perf_counter() - start_time) * 1000
+
+    footer_text = f"⚡ Response time: {response_time:.0f}ms"
     if total_partners > 10:
-        embed.set_footer(text=f"Showing top 10 of {total_partners} partners")
+        footer_text = f"Showing top 10 of {total_partners} partners • {footer_text}"
+
+    embed.set_footer(text=footer_text)
 
     await ctx.send(embed=embed)
 
@@ -716,6 +734,7 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
     Usage: !leaderboard [category] [page]
     Example: !leaderboard session 1
     """
+    start_time = time.perf_counter()
     data = load_data()
     guild_data = data.get(str(ctx.guild.id), {})
 
@@ -793,8 +812,9 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
             inline=False
         )
 
-    # Add footer with available categories
-    embed.set_footer(text="Categories: xp, level, messages, reactions, vc, session")
+    # Add footer with available categories and response time
+    response_time = (time.perf_counter() - start_time) * 1000
+    embed.set_footer(text=f"Categories: xp, level, messages, reactions, vc, session • ⚡ {response_time:.0f}ms")
 
     await ctx.send(embed=embed)
 
@@ -803,6 +823,8 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
 @commands.has_permissions(administrator=True)
 async def xp_config(ctx):
     """Show current XP configuration (Admin only)"""
+    start_time = time.perf_counter()
+
     embed = discord.Embed(title="⚙️ XP Configuration", color=discord.Color.green())
     embed.add_field(name="Bot Version", value=BOT_VERSION, inline=True)
     embed.add_field(name="XP per Message", value=XP_PER_MESSAGE, inline=True)
@@ -824,6 +846,9 @@ async def xp_config(ctx):
     else:
         embed.add_field(name="Live Leaderboard Channel", value="Not Configured", inline=True)
 
+    response_time = (time.perf_counter() - start_time) * 1000
+    embed.set_footer(text=f"⚡ Response time: {response_time:.0f}ms")
+
     await ctx.send(embed=embed)
 
 
@@ -831,6 +856,8 @@ async def xp_config(ctx):
 @commands.has_permissions(administrator=True)
 async def reset_xp(ctx, member: discord.Member):
     """Reset a user's XP (Admin only)"""
+    start_time = time.perf_counter()
+
     data = load_data()
     guild_id = str(ctx.guild.id)
     user_id = str(member.id)
@@ -838,23 +865,33 @@ async def reset_xp(ctx, member: discord.Member):
     if guild_id in data and user_id in data[guild_id]:
         del data[guild_id][user_id]
         save_data(data)
-        await ctx.send(f"✅ Reset XP for {member.display_name}")
+        response_time = (time.perf_counter() - start_time) * 1000
+        await ctx.send(f"✅ Reset XP for {member.display_name}\n⚡ Response time: {response_time:.0f}ms")
     else:
-        await ctx.send(f"❌ No XP data found for {member.display_name}")
+        response_time = (time.perf_counter() - start_time) * 1000
+        await ctx.send(f"❌ No XP data found for {member.display_name}\n⚡ Response time: {response_time:.0f}ms")
 
 
 @bot.command(name='version')
 async def version(ctx):
     """Display the bot version"""
+    start_time = time.perf_counter()
+
     embed = discord.Embed(title="🤖 Bot Information", color=discord.Color.purple())
     embed.add_field(name="Version", value=BOT_VERSION, inline=True)
     embed.add_field(name="Bot Name", value=bot.user.name, inline=True)
+
+    response_time = (time.perf_counter() - start_time) * 1000
+    embed.set_footer(text=f"⚡ Response time: {response_time:.0f}ms")
+
     await ctx.send(embed=embed)
 
 
 @bot.command(name='help')
 async def help_command(ctx):
     """Display all available bot commands"""
+    start_time = time.perf_counter()
+
     embed = discord.Embed(
         title="📚 Bot Commands",
         description="Here are all the available commands:",
@@ -887,7 +924,8 @@ async def help_command(ctx):
         inline=False
     )
 
-    embed.set_footer(text=f"Bot Version: {BOT_VERSION}")
+    response_time = (time.perf_counter() - start_time) * 1000
+    embed.set_footer(text=f"Bot Version: {BOT_VERSION} • ⚡ Response time: {response_time:.0f}ms")
 
     await ctx.send(embed=embed)
 
