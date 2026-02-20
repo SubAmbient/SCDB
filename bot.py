@@ -50,9 +50,8 @@ DEFAULT_CONFIG = {
 def load_stop_words(filepath='stop_words.json'):
     """Load stop words from JSON file, falling back to an empty set if missing"""
     if os.path.exists(filepath):
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, 'r', encoding='utf-8-sig') as f:  # utf-8-sig handles BOM automatically
             data = json.load(f)
-        # Flatten all language lists into a single set
         words = set()
         for language_list in data.values():
             words.update(w.lower() for w in language_list)
