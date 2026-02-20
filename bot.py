@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import hashlib
+import re
 
 # Bot version
 BOT_VERSION = "0.2.2"
@@ -45,6 +46,23 @@ DEFAULT_CONFIG = {
     'xp_per_minute_vc': 2,
     'message_cooldown': 10
 }
+
+def load_stop_words(filepath='stop_words.json'):
+    """Load stop words from JSON file, falling back to an empty set if missing"""
+    if os.path.exists(filepath):
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        # Flatten all language lists into a single set
+        words = set()
+        for language_list in data.values():
+            words.update(w.lower() for w in language_list)
+        return words
+    else:
+        print(f"Warning: {filepath} not found, favorite_word tracking will not filter stop words")
+        return set()
+
+# Common words to exclude from favorite_word tracking
+STOP_WORDS = load_stop_words()
 
 # Store the leaderboard message ID for updating
 leaderboard_message = None
@@ -111,26 +129,54 @@ def get_user_data(data, guild_id, user_id, username=None):
             'messages': 0,
             'reactions': 0,
             'vc_seconds': 0,
-            'vc_partners': {},  # Track time with each voice channel partner
-            'longest_session': 0,  # Longest single VC session in seconds
-            'longest_session_date': None  # When the longest session occurred
+            'vc_joins': 0,                # Number of times user has joined a voice channel
+            'vc_partners': {},             # Time spent with each voice channel partner
+            'longest_session': 0,          # Longest single VC session in seconds
+            'longest_session_date': None,  # When the longest session occurred
+            'favorite_channel': {},        # channel_id (str) → message count
+            'favorite_vc_channel': {},     # channel_id (str) → seconds
+            'total_characters_typed': 0,   # Total characters across all messages
+            'favorite_word': {}            # word → count (stop words excluded)
         }
     else:
         # Update username if provided (in case user changed their name)
         if username:
             data[guild_id][user_id]['username'] = username
 
-        # Ensure vc_partners exists for existing users
-        if 'vc_partners' not in data[guild_id][user_id]:
-            data[guild_id][user_id]['vc_partners'] = {}
-
-        # Ensure longest_session fields exist for existing users
-        if 'longest_session' not in data[guild_id][user_id]:
-            data[guild_id][user_id]['longest_session'] = 0
-        if 'longest_session_date' not in data[guild_id][user_id]:
-            data[guild_id][user_id]['longest_session_date'] = None
+        # Migrations: ensure all fields exist for existing users
+        user = data[guild_id][user_id]
+        if 'vc_partners' not in user:
+            user['vc_partners'] = {}
+        if 'vc_joins' not in user:
+            user['vc_joins'] = 0
+        if 'longest_session' not in user:
+            user['longest_session'] = 0
+        if 'longest_session_date' not in user:
+            user['longest_session_date'] = None
+        if 'favorite_channel' not in user:
+            user['favorite_channel'] = {}
+        if 'favorite_vc_channel' not in user:
+            user['favorite_vc_channel'] = {}
+        if 'total_characters_typed' not in user:
+            user['total_characters_typed'] = 0
+        if 'favorite_word' not in user:
+            user['favorite_word'] = {}
 
     return data[guild_id][user_id]
+
+
+def extract_words(content):
+    """Extract meaningful words from a message, stripping mentions, URLs, and punctuation"""
+    # Remove URLs
+    content = re.sub(r'https?://\S+', '', content)
+    # Remove Discord mentions (<@id>, <#id>, <@&id>)
+    content = re.sub(r'<[@#&!][^>]+>', '', content)
+    # Remove custom emoji (<:name:id>)
+    content = re.sub(r'<a?:[^:]+:\d+>', '', content)
+    # Lowercase and extract only alphabetic words
+    words = re.findall(r"[a-z']{2,}", content.lower())
+    # Filter out stop words and pure-apostrophe artifacts
+    return [w for w in words if w not in STOP_WORDS and w.strip("'")]
 
 
 def get_cached_rank(guild_id, user_id, guild_data):
@@ -385,6 +431,21 @@ async def on_message(message):
     user_data['messages'] += 1
     user_data['level'] = calculate_level(user_data['xp'])
 
+    # --- Wrapped stats ---
+
+    # Favorite channel: increment count for this channel
+    channel_id = str(message.channel.id)
+    user_data['favorite_channel'][channel_id] = user_data['favorite_channel'].get(channel_id, 0) + 1
+
+    # Total characters typed (raw message content length)
+    user_data['total_characters_typed'] += len(message.content)
+
+    # Favorite word: extract and count meaningful words
+    for word in extract_words(message.content):
+        user_data['favorite_word'][word] = user_data['favorite_word'].get(word, 0) + 1
+
+    # --- End wrapped stats ---
+
     save_data(data)
 
     # Check for level up
@@ -467,6 +528,12 @@ async def on_voice_state_update(member, before, after):
         voice_join_times[user_key] = datetime.now()
         voice_session_starts[user_key] = datetime.now()
 
+        # Increment vc_joins counter (no XP awarded, tracking only)
+        data = load_data()
+        user_data = get_user_data(data, member.guild.id, member.id, str(member))
+        user_data['vc_joins'] += 1
+        save_data(data)
+
     # User left a voice channel
     elif before.channel is not None and after.channel is None:
         if user_key in voice_session_starts:
@@ -505,6 +572,8 @@ async def check_voice_xp():
             if len(non_bot_members) <= 1:
                 continue
 
+            channel_id = str(voice_channel.id)
+
             for member in non_bot_members:
                 user_key = f"{guild.id}_{member.id}"
                 if user_key in voice_join_times:
@@ -515,6 +584,11 @@ async def check_voice_xp():
                     user_data['xp'] += XP_PER_MINUTE_VC
                     user_data['vc_seconds'] += 60
                     user_data['level'] = calculate_level(user_data['xp'])
+
+                    # Favorite VC channel: accumulate seconds per channel
+                    user_data['favorite_vc_channel'][channel_id] = (
+                        user_data['favorite_vc_channel'].get(channel_id, 0) + 60
+                    )
 
                     # Track time with each partner in the voice channel
                     for partner in non_bot_members:
