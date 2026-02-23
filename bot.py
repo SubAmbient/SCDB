@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 # Bot version
-BOT_VERSION = "0.3.2"
+BOT_VERSION = "0.3.3"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -45,7 +45,8 @@ DEFAULT_CONFIG = {
     'xp_per_message': 5,
     'xp_per_reaction': 5,
     'xp_per_minute_vc': 2,
-    'message_cooldown': 10
+    'message_cooldown': 10,
+    'excluded_favword_channels': []
 }
 
 def load_stop_words(filepath='stop_words.json'):
@@ -150,13 +151,25 @@ def load_config():
     """Load configuration from JSON file, create if doesn't exist"""
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r') as f:
-            return json.load(f)
+            cfg = json.load(f)
+        # Migration: ensure excluded_favword_channels exists in older config files
+        if 'excluded_favword_channels' not in cfg:
+            cfg['excluded_favword_channels'] = []
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(cfg, f, indent=4)
+        return cfg
     else:
         # Create config file with defaults
         with open(CONFIG_FILE, 'w') as f:
             json.dump(DEFAULT_CONFIG, f, indent=4)
         print(f"Created {CONFIG_FILE} with default values")
         return DEFAULT_CONFIG.copy()
+
+
+def save_config(cfg):
+    """Save configuration to JSON file"""
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(cfg, f, indent=4)
 
 
 # Load configuration
@@ -496,11 +509,17 @@ async def on_message(message):
     current_time = datetime.now()
     current_hour = str(current_time.hour)  # "0" – "23"
 
+    # Skip all tracking if the channel is excluded
+    excluded_channels = config.get('excluded_favword_channels', [])
+    if message.channel.id in excluded_channels:
+        await bot.process_commands(message)
+        return
+
     # Load data once for this message
     data = load_data()
     user_data = get_user_data(data, message.guild.id, message.author.id, str(message.author))
 
-    # Always track favorite words regardless of cooldown
+    # Track favorite words (not commands)
     if not message.content.startswith(bot.command_prefix):
         for word in extract_words(message.content):
             user_data['favorite_word'][word] = user_data['favorite_word'].get(word, 0) + 1
@@ -706,6 +725,100 @@ async def check_voice_xp():
 
     save_data(data)
 
+
+@bot.command(name='excludechannel')
+@commands.has_permissions(administrator=True)
+async def exclude_channel(ctx, channel: discord.TextChannel = None):
+    """Exclude a channel from all XP and stat tracking (Admin only).
+
+    Usage: !excludechannel [#channel]
+    Omit #channel to exclude the current channel.
+    """
+    start_time = time.perf_counter()
+    target = channel or ctx.channel
+
+    excluded = config.setdefault('excluded_favword_channels', [])
+
+    if target.id in excluded:
+        msg = await ctx.send(
+            f"⚠️ {target.mention} is already excluded from favwords tracking.\n⚡ Calculating..."
+        )
+    else:
+        excluded.append(target.id)
+        save_config(config)
+        msg = await ctx.send(
+            f"✅ {target.mention} has been excluded from all XP and stat tracking. "
+            f"Messages there will no longer count towards anything.\n⚡ Calculating..."
+        )
+
+    response_time = (time.perf_counter() - start_time) * 1000
+    await msg.edit(content=msg.content.replace("⚡ Calculating...", f"⚡ {response_time:.0f}ms"))
+
+
+@bot.command(name='includechannel')
+@commands.has_permissions(administrator=True)
+async def include_channel(ctx, channel: discord.TextChannel = None):
+    """Re-include a previously excluded channel in all XP and stat tracking (Admin only).
+
+    Usage: !includechannel [#channel]
+    Omit #channel to re-include the current channel.
+    """
+    start_time = time.perf_counter()
+    target = channel or ctx.channel
+
+    excluded = config.setdefault('excluded_favword_channels', [])
+
+    if target.id not in excluded:
+        msg = await ctx.send(
+            f"⚠️ {target.mention} is not currently excluded from tracking.\n⚡ Calculating..."
+        )
+    else:
+        excluded.remove(target.id)
+        save_config(config)
+        msg = await ctx.send(
+            f"✅ {target.mention} has been re-included in all XP and stat tracking. "
+            f"Messages there will count again.\n⚡ Calculating..."
+        )
+
+    response_time = (time.perf_counter() - start_time) * 1000
+    await msg.edit(content=msg.content.replace("⚡ Calculating...", f"⚡ {response_time:.0f}ms"))
+
+
+@bot.command(name='excludedchannels')
+@commands.has_permissions(administrator=True)
+async def list_excluded_channels(ctx):
+    """List all channels currently excluded from favwords tracking (Admin only)."""
+    start_time = time.perf_counter()
+
+    excluded = config.get('excluded_favword_channels', [])
+
+    embed = discord.Embed(
+        title="🚫 Channels Excluded from All Tracking",
+        color=discord.Color.red()
+    )
+
+    if not excluded:
+        embed.description = "No channels are currently excluded."
+        embed.set_footer(text="⚡ Calculating...")
+    else:
+        lines = []
+        for ch_id in excluded:
+            ch = ctx.guild.get_channel(ch_id)
+            lines.append(ch.mention if ch else f"Unknown channel (ID: {ch_id})")
+        embed.description = "\n".join(lines)
+        embed.set_footer(text=f"{len(excluded)} excluded channel(s) • ⚡ Calculating...")
+
+    msg = await ctx.send(embed=embed)
+    response_time = (time.perf_counter() - start_time) * 1000
+
+    footer = embed.footer.text.replace("⚡ Calculating...", f"⚡ {response_time:.0f}ms")
+    embed.set_footer(text=footer)
+    await msg.edit(embed=embed)
+
+
+# ---------------------------------------------------------------------------
+# Existing admin / user commands
+# ---------------------------------------------------------------------------
 
 @bot.command(name='setleaderboard')
 @commands.has_permissions(administrator=True)
@@ -1153,9 +1266,9 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
     await message.edit(embed=embed)
 
 
-@bot.command(name='xpconfig')
+@bot.command(name='config')
 @commands.has_permissions(administrator=True)
-async def xp_config(ctx):
+async def config(ctx):
     """Show current XP configuration (Admin only)"""
     start_time = time.perf_counter()
 
@@ -1179,6 +1292,21 @@ async def xp_config(ctx):
         embed.add_field(name="Live Leaderboard Channel", value=channel_name, inline=True)
     else:
         embed.add_field(name="Live Leaderboard Channel", value="Not Configured", inline=True)
+
+    # Show excluded favword channels
+    excluded = config.get('excluded_favword_channels', [])
+    if excluded:
+        excluded_names = []
+        for ch_id in excluded:
+            ch = ctx.guild.get_channel(ch_id)
+            excluded_names.append(ch.mention if ch else f"ID: {ch_id}")
+        embed.add_field(
+            name="🚫 Excluded Channels (No Tracking)",
+            value="\n".join(excluded_names),
+            inline=False
+        )
+    else:
+        embed.add_field(name="🚫 Excluded Channels (No Tracking)", value="None", inline=False)
 
     embed.set_footer(text="⚡ Calculating...")
 
@@ -1267,7 +1395,10 @@ async def help_command(ctx):
         value=(
             "**!xpconfig** - View current XP configuration\n"
             "**!resetxp** `@user` - Reset a user's XP data\n"
-            "**!setleaderboard** - Set current channel as live leaderboard (updates every 10s)"
+            "**!setleaderboard** - Set current channel as live leaderboard (updates every 10s)\n"
+            "**!excludechannel** `[#channel]` - Exclude a channel from all XP and stat tracking\n"
+            "**!includechannel** `[#channel]` - Re-include a channel in all XP and stat tracking\n"
+            "**!excludedchannels** - List all excluded channels"
         ),
         inline=False
     )
