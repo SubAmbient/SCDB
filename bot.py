@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 # Bot version
-BOT_VERSION = "0.3.0"
+BOT_VERSION = "0.3.1"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -521,9 +521,10 @@ async def on_message(message):
     # Total characters typed (raw message content length)
     user_data['total_characters_typed'] += len(message.content)
 
-    # Favorite word: extract and count meaningful words
-    for word in extract_words(message.content):
-        user_data['favorite_word'][word] = user_data['favorite_word'].get(word, 0) + 1
+    # Favorite word: extract and count meaningful words (skip commands)
+    if not message.content.startswith(bot.command_prefix):
+        for word in extract_words(message.content):
+            user_data['favorite_word'][word] = user_data['favorite_word'].get(word, 0) + 1
 
     user_data['hourly_messages'][current_hour] = (
         user_data['hourly_messages'].get(current_hour, 0) + 1
