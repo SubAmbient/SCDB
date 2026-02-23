@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import hashlib
 import re
+from typing import Optional
 
 # Bot version
 BOT_VERSION = "0.3.0"
@@ -104,7 +105,7 @@ def classify_activity(hourly_messages: dict) -> str:
     return labels[peak]
 
 
-def format_peak_hour(hourly_dict: dict) -> str | None:
+def format_peak_hour(hourly_dict: dict) -> Optional[str]:
     """
     Return the peak hour from an {hour_str: value} dict
     formatted as a 12-hour clock string (e.g. '3pm', '11am').
