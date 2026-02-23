@@ -10,7 +10,7 @@ import hashlib
 import re
 
 # Bot version
-BOT_VERSION = "0.2.2"
+BOT_VERSION = "0.2.3"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -854,6 +854,47 @@ async def vc_partners(ctx, member: discord.Member = None):
     embed.set_footer(text=footer_text)
     await message.edit(embed=embed)
 
+@bot.command(name='favwords')
+async def fav_words(ctx, member: discord.Member = None):
+    """Show a user's top 5 most used words"""
+    start_time = time.perf_counter()
+    member = member or ctx.author
+
+    data = load_data()
+    user_data = get_user_data(data, ctx.guild.id, member.id)
+
+    favorite_word = user_data.get('favorite_word', {})
+
+    if not favorite_word:
+        message = await ctx.send(f"{member.display_name} hasn't sent enough messages to track words yet!")
+        response_time = (time.perf_counter() - start_time) * 1000
+        await message.edit(content=f"{member.display_name} hasn't sent enough messages to track words yet!\n⚡ {response_time:.0f}ms")
+        return
+
+    sorted_words = sorted(favorite_word.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    embed = discord.Embed(
+        title=f"💬 {member.display_name}'s Favorite Words",
+        description="Top 5 most used words (common words excluded)",
+        color=discord.Color.teal()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    for i, (word, count) in enumerate(sorted_words):
+        embed.add_field(
+            name=f"{medals[i]} #{i+1} \"{word}\"",
+            value=f"Used **{count:,}** time{'s' if count != 1 else ''}",
+            inline=False
+        )
+
+    embed.set_footer(text="⚡ Calculating...")
+
+    message = await ctx.send(embed=embed)
+    response_time = (time.perf_counter() - start_time) * 1000
+    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
+    await message.edit(embed=embed)
+
 
 @bot.command(name='leaderboard')
 async def leaderboard(ctx, category: str = 'xp', page: int = 1):
@@ -1049,6 +1090,7 @@ async def help_command(ctx):
             "**!profile** `[@user]` - View comprehensive profile with stats and progress\n"
             "**!rank** `[@user]` - View your or someone else's rank and stats\n"
             "**!vcpartners** `[@user]` - See top voice channel partners\n"
+            "**!favwords** `[@user]` - See top 5 most used words\n"
             "**!leaderboard** `[category] [page]` - View server leaderboards\n"
             "   Categories: `xp`, `level`, `messages`, `reactions`, `vc`, `session`\n"
             "**!version** - Display bot version information\n"
