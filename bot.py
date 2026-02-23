@@ -1266,9 +1266,9 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
     await message.edit(embed=embed)
 
 
-@bot.command(name='config')
+@bot.command(name='xpconfig')
 @commands.has_permissions(administrator=True)
-async def config(ctx):
+async def xp_config(ctx):
     """Show current XP configuration (Admin only)"""
     start_time = time.perf_counter()
 
