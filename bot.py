@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 # Bot version
-BOT_VERSION = "0.3.1"
+BOT_VERSION = "0.3.2"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -492,23 +492,30 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
-    # Check cooldown
     user_key = f"{message.guild.id}_{message.author.id}"
     current_time = datetime.now()
     current_hour = str(current_time.hour)  # "0" – "23"
 
+    # Load data once for this message
+    data = load_data()
+    user_data = get_user_data(data, message.guild.id, message.author.id, str(message.author))
+
+    # Always track favorite words regardless of cooldown
+    if not message.content.startswith(bot.command_prefix):
+        for word in extract_words(message.content):
+            user_data['favorite_word'][word] = user_data['favorite_word'].get(word, 0) + 1
+
+    # Check cooldown — save word tracking and bail out early if on cooldown
     if user_key in message_cooldowns:
         if current_time - message_cooldowns[user_key] < timedelta(seconds=MESSAGE_COOLDOWN):
+            save_data(data)  # Persist the word tracking recorded above
             await bot.process_commands(message)
             return
 
     # Update cooldown
     message_cooldowns[user_key] = current_time
 
-    # Load data and award XP
-    data = load_data()
-    user_data = get_user_data(data, message.guild.id, message.author.id, str(message.author))
-
+    # Award XP and update stats
     old_level = user_data['level']
     user_data['xp'] += XP_PER_MESSAGE
     user_data['messages'] += 1
@@ -521,23 +528,16 @@ async def on_message(message):
     # Total characters typed (raw message content length)
     user_data['total_characters_typed'] += len(message.content)
 
-    # Favorite word: extract and count meaningful words (skip commands)
-    if not message.content.startswith(bot.command_prefix):
-        for word in extract_words(message.content):
-            user_data['favorite_word'][word] = user_data['favorite_word'].get(word, 0) + 1
-
     user_data['hourly_messages'][current_hour] = (
         user_data['hourly_messages'].get(current_hour, 0) + 1
     )
 
-    # We collect mention targets here and update them in the same data load
-    # to avoid extra load_data / save_data calls.
+    # Track mentions received by other users
     for mentioned in message.mentions:
         if mentioned.bot or mentioned.id == message.author.id:
             continue
         mentioned_data = get_user_data(data, message.guild.id, mentioned.id, str(mentioned))
         mentioned_data['mentions_received'] = mentioned_data.get('mentions_received', 0) + 1
-
 
     save_data(data)
 
