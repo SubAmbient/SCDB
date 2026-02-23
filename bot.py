@@ -10,7 +10,7 @@ import hashlib
 import re
 
 # Bot version
-BOT_VERSION = "0.2.3"
+BOT_VERSION = "0.3.0"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -37,7 +37,7 @@ bot = commands.Bot(command_prefix='!', intents=INTENTS, help_command=None)
 
 # Configuration files
 CONFIG_FILE = 'config.json'
-DB_FILE = 'xp_data.json'
+DB_FILE = 'data.json'
 
 # Default XP Configuration
 DEFAULT_CONFIG = {
@@ -69,6 +69,79 @@ leaderboard_message = None
 # Cache for rank calculations
 _rank_cache = {}
 _rank_cache_hash = None
+
+
+def classify_activity(hourly_messages: dict) -> str:
+    """
+    Return an activity-type label based on which time bucket
+    contains the most message activity.
+    """
+    if not hourly_messages:
+        return "❓ Unknown"
+
+    buckets = {
+        'early_bird': set(range(5, 12)),
+        'afternoon':  set(range(12, 18)),
+        'evening':    set(range(18, 23)),
+        'night_owl':  set(range(23, 24)) | set(range(0, 5)),
+    }
+
+    scores = {k: 0 for k in buckets}
+    for hour_str, count in hourly_messages.items():
+        hour = int(hour_str)
+        for bucket, hours in buckets.items():
+            if hour in hours:
+                scores[bucket] += count
+                break
+
+    peak = max(scores, key=scores.get)
+    labels = {
+        'early_bird': '🌅 Early Bird',
+        'afternoon':  '☀️ Day Person',
+        'evening':    '🌆 Evening Person',
+        'night_owl':  '🦉 Night Owl',
+    }
+    return labels[peak]
+
+
+def format_peak_hour(hourly_dict: dict) -> str | None:
+    """
+    Return the peak hour from an {hour_str: value} dict
+    formatted as a 12-hour clock string (e.g. '3pm', '11am').
+    Returns None if the dict is empty.
+    """
+    if not hourly_dict:
+        return None
+    peak_hour = int(max(hourly_dict, key=hourly_dict.get))
+    if peak_hour == 0:
+        return "12am"
+    elif peak_hour < 12:
+        return f"{peak_hour}am"
+    elif peak_hour == 12:
+        return "12pm"
+    else:
+        return f"{peak_hour - 12}pm"
+
+
+def build_hourly_bar(hourly_dict: dict, label: str) -> str:
+    """
+    Build a compact 24-column text bar chart for an hourly dict.
+    Each column represents one hour (0-23).
+    Used by the !activity command.
+    """
+    if not hourly_dict:
+        return f"{label}: no data yet"
+
+    max_val = max(hourly_dict.values()) or 1
+    bars = ""
+    for h in range(24):
+        val = hourly_dict.get(str(h), 0)
+        # Scale to 0-8 using block elements
+        level = round((val / max_val) * 8)
+        blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+        bars += blocks[level - 1] if level > 0 else " "
+
+    return f"{label}\n`{bars}`\n`0  3  6  9  12 15 18 21 `"\
 
 
 # Load or create config
@@ -135,7 +208,10 @@ def get_user_data(data, guild_id, user_id, username=None):
             'favorite_channel': {},        # channel_id (str) → message count
             'favorite_vc_channel': {},     # channel_id (str) → seconds
             'total_characters_typed': 0,   # Total characters across all messages
-            'favorite_word': {}            # word → count (stop words excluded)
+            'favorite_word': {},           # word → count (stop words excluded)
+            'hourly_messages': {},         # hour str (0-23) → message count
+            'mentions_received': 0,        # Times this user was @mentioned by others
+            'hourly_vc': {},               # hour str (0-23) → vc seconds
         }
     else:
         # Update username if provided (in case user changed their name)
@@ -160,6 +236,12 @@ def get_user_data(data, guild_id, user_id, username=None):
             user['total_characters_typed'] = 0
         if 'favorite_word' not in user:
             user['favorite_word'] = {}
+        if 'hourly_messages' not in user:
+            user['hourly_messages'] = {}
+        if 'mentions_received' not in user:
+            user['mentions_received'] = 0
+        if 'hourly_vc' not in user:
+            user['hourly_vc'] = {}
 
     return data[guild_id][user_id]
 
@@ -412,6 +494,7 @@ async def on_message(message):
     # Check cooldown
     user_key = f"{message.guild.id}_{message.author.id}"
     current_time = datetime.now()
+    current_hour = str(current_time.hour)  # "0" – "23"
 
     if user_key in message_cooldowns:
         if current_time - message_cooldowns[user_key] < timedelta(seconds=MESSAGE_COOLDOWN):
@@ -430,8 +513,6 @@ async def on_message(message):
     user_data['messages'] += 1
     user_data['level'] = calculate_level(user_data['xp'])
 
-    # --- Wrapped stats ---
-
     # Favorite channel: increment count for this channel
     channel_id = str(message.channel.id)
     user_data['favorite_channel'][channel_id] = user_data['favorite_channel'].get(channel_id, 0) + 1
@@ -443,7 +524,18 @@ async def on_message(message):
     for word in extract_words(message.content):
         user_data['favorite_word'][word] = user_data['favorite_word'].get(word, 0) + 1
 
-    # --- End wrapped stats ---
+    user_data['hourly_messages'][current_hour] = (
+        user_data['hourly_messages'].get(current_hour, 0) + 1
+    )
+
+    # We collect mention targets here and update them in the same data load
+    # to avoid extra load_data / save_data calls.
+    for mentioned in message.mentions:
+        if mentioned.bot or mentioned.id == message.author.id:
+            continue
+        mentioned_data = get_user_data(data, message.guild.id, mentioned.id, str(mentioned))
+        mentioned_data['mentions_received'] = mentioned_data.get('mentions_received', 0) + 1
+
 
     save_data(data)
 
@@ -560,6 +652,7 @@ async def on_voice_state_update(member, before, after):
 async def check_voice_xp():
     """Periodically award XP to users currently in voice channels and track partner time"""
     data = load_data()
+    current_hour = str(datetime.now().hour)
 
     for guild in bot.guilds:
         for voice_channel in guild.voice_channels:
@@ -587,6 +680,10 @@ async def check_voice_xp():
                     # Favorite VC channel: accumulate seconds per channel
                     user_data['favorite_vc_channel'][channel_id] = (
                         user_data['favorite_vc_channel'].get(channel_id, 0) + 60
+                    )
+
+                    user_data['hourly_vc'][current_hour] = (
+                        user_data['hourly_vc'].get(current_hour, 0) + 60
                     )
 
                     # Track time with each partner in the voice channel
@@ -689,6 +786,16 @@ async def profile(ctx, member: discord.Member = None):
     embed.add_field(name="❤️ Reactions", value=f"{user_data['reactions']:,}", inline=True)
     embed.add_field(name="🎙️ VC Time", value=format_time(user_data.get('vc_seconds', 0)), inline=True)
 
+    mentions = user_data.get('mentions_received', 0)
+    embed.add_field(name="📣 Times Mentioned", value=f"{mentions:,}", inline=True)
+
+    activity_type = classify_activity(user_data.get('hourly_messages', {}))
+    embed.add_field(name="🕐 Activity Type", value=activity_type, inline=True)
+
+    peak_vc = format_peak_hour(user_data.get('hourly_vc', {}))
+    if peak_vc:
+        embed.add_field(name="🎙️ Peak VC Hour", value=peak_vc, inline=True)
+
     # Longest session info
     longest_session = user_data.get('longest_session', 0)
     if longest_session > 0:
@@ -785,6 +892,55 @@ async def rank(ctx, member: discord.Member = None):
     await message.edit(embed=embed)
 
 
+@bot.command(name='activity')
+async def activity(ctx, member: discord.Member = None):
+    """
+    Show hourly activity charts for messages and voice time.
+
+    Usage: !activity [@user]
+    """
+    start_time = time.perf_counter()
+    member = member or ctx.author
+
+    data = load_data()
+    user_data = get_user_data(data, ctx.guild.id, member.id)
+
+    hourly_messages = user_data.get('hourly_messages', {})
+    hourly_vc = user_data.get('hourly_vc', {})
+    activity_type = classify_activity(hourly_messages)
+    peak_msg_hour = format_peak_hour(hourly_messages)
+    peak_vc_hour = format_peak_hour(hourly_vc)
+
+    embed = discord.Embed(
+        title=f"📊 {member.display_name}'s Activity Patterns",
+        color=discord.Color.og_blurple()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    # Activity classification
+    embed.add_field(name="🕐 Activity Type", value=activity_type, inline=True)
+    if peak_msg_hour:
+        embed.add_field(name="💬 Peak Message Hour", value=peak_msg_hour, inline=True)
+    if peak_vc_hour:
+        embed.add_field(name="🎙️ Peak VC Hour", value=peak_vc_hour, inline=True)
+
+    # Hourly bar charts
+    msg_bar = build_hourly_bar(hourly_messages, "💬 Messages by hour")
+    embed.add_field(name="\u200b", value=msg_bar, inline=False)
+
+    if hourly_vc:
+        vc_bar = build_hourly_bar(hourly_vc, "🎙️ VC time by hour")
+        embed.add_field(name="\u200b", value=vc_bar, inline=False)
+
+    # Time zone note
+    embed.set_footer(text="Times are in the server's local timezone • ⚡ Calculating...")
+
+    message = await ctx.send(embed=embed)
+    response_time = (time.perf_counter() - start_time) * 1000
+    embed.set_footer(text=f"Times are in the server's local timezone • ⚡ {response_time:.0f}ms")
+    await message.edit(embed=embed)
+
+
 @bot.command(name='vcpartners')
 async def vc_partners(ctx, member: discord.Member = None):
     """Show who you've spent the most time with in voice channels"""
@@ -854,6 +1010,7 @@ async def vc_partners(ctx, member: discord.Member = None):
     embed.set_footer(text=footer_text)
     await message.edit(embed=embed)
 
+
 @bot.command(name='favwords')
 async def fav_words(ctx, member: discord.Member = None):
     """Show a user's top 5 most used words"""
@@ -900,9 +1057,10 @@ async def fav_words(ctx, member: discord.Member = None):
 async def leaderboard(ctx, category: str = 'xp', page: int = 1):
     """Show the server leaderboard
 
-    Categories: xp, level, messages, reactions, vc (voice chat time), session (longest session)
+    Categories: xp, level, messages, reactions, vc (voice chat time), session (longest session),
+                mentions (most mentioned)
     Usage: !leaderboard [category] [page]
-    Example: !leaderboard session 1
+    Example: !leaderboard mentions 1
     """
     start_time = time.perf_counter()
     data = load_data()
@@ -915,19 +1073,22 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
     # Validate and normalize category
     category = category.lower()
     valid_categories = {
-        'xp': ('xp', '🏆 XP', 'XP'),
-        'level': ('level', '⭐ Level', 'Level'),
-        'messages': ('messages', '💬 Messages', 'Messages'),
-        'reactions': ('reactions', '❤️ Reactions', 'Reactions'),
-        'vc': ('vc_seconds', '🎙️ Voice Time', 'Time'),
-        'vctime': ('vc_seconds', '🎙️ Voice Time', 'Time'),
-        'voice': ('vc_seconds', '🎙️ Voice Time', 'Time'),
-        'session': ('longest_session', '⏱️ Longest Session', 'Session'),
-        'longest': ('longest_session', '⏱️ Longest Session', 'Session')
+        'xp':       ('xp',                '🏆 XP',               'XP'),
+        'level':    ('level',             '⭐ Level',            'Level'),
+        'messages': ('messages',          '💬 Messages',         'Messages'),
+        'reactions':('reactions',         '❤️ Reactions',        'Reactions'),
+        'vc':       ('vc_seconds',        '🎙️ Voice Time',       'Time'),
+        'vctime':   ('vc_seconds',        '🎙️ Voice Time',       'Time'),
+        'voice':    ('vc_seconds',        '🎙️ Voice Time',       'Time'),
+        'session':  ('longest_session',   '⏱️ Longest Session',  'Session'),
+        'longest':  ('longest_session',   '⏱️ Longest Session',  'Session'),
+        'mentions': ('mentions_received', '📣 Most Mentioned',   'Mentions'),
     }
 
     if category not in valid_categories:
-        await ctx.send(f"❌ Invalid category! Use: `xp`, `level`, `messages`, `reactions`, `vc`, or `session`")
+        await ctx.send(
+            f"❌ Invalid category! Use: `xp`, `level`, `messages`, `reactions`, `vc`, `session`, or `mentions`"
+        )
         return
 
     sort_key, title_emoji, stat_name = valid_categories[category]
@@ -966,11 +1127,9 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
         stat_value = user_data.get(sort_key, 0)
 
         if sort_key in ['vc_seconds', 'longest_session']:
-            # Format time
             formatted_stat = format_time(stat_value)
             value_text = f"{formatted_stat} • Level {user_data['level']}"
         else:
-            # Format numbers with commas
             formatted_stat = f"{stat_value:,}"
             value_text = f"{formatted_stat} {stat_name} • Level {user_data['level']}"
 
@@ -980,15 +1139,15 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
             inline=False
         )
 
-    # Add footer with available categories
-    embed.set_footer(text=f"Categories: xp, level, messages, reactions, vc, session • ⚡ Calculating...")
+    embed.set_footer(text="Categories: xp, level, messages, reactions, vc, session, mentions • ⚡ Calculating...")
 
     # Send message and measure total time
     message = await ctx.send(embed=embed)
     response_time = (time.perf_counter() - start_time) * 1000
 
-    # Update footer with actual response time
-    embed.set_footer(text=f"Categories: xp, level, messages, reactions, vc, session • ⚡ {response_time:.0f}ms")
+    embed.set_footer(
+        text=f"Categories: xp, level, messages, reactions, vc, session, mentions • ⚡ {response_time:.0f}ms"
+    )
     await message.edit(embed=embed)
 
 
@@ -1089,10 +1248,11 @@ async def help_command(ctx):
         value=(
             "**!profile** `[@user]` - View comprehensive profile with stats and progress\n"
             "**!rank** `[@user]` - View your or someone else's rank and stats\n"
+            "**!activity** `[@user]` - View hourly activity charts and Early Bird / Night Owl type\n"
             "**!vcpartners** `[@user]` - See top voice channel partners\n"
             "**!favwords** `[@user]` - See top 5 most used words\n"
             "**!leaderboard** `[category] [page]` - View server leaderboards\n"
-            "   Categories: `xp`, `level`, `messages`, `reactions`, `vc`, `session`\n"
+            "   Categories: `xp`, `level`, `messages`, `reactions`, `vc`, `session`, `mentions`\n"
             "**!version** - Display bot version information\n"
             "**!help** - Show this help message"
         ),
