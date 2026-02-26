@@ -911,6 +911,12 @@ async def profile(ctx, member: discord.Member = None):
     if peak_vc:
         embed.add_field(name="🎙️ Peak VC Hour", value=peak_vc, inline=True)
 
+    bot_joined = ctx.guild.me.joined_at
+    if bot_joined:
+        days_since_join = max((datetime.now(bot_joined.tzinfo) - bot_joined).days, 1)
+        avg_daily_vc = user_data.get('vc_seconds', 0) / days_since_join
+        embed.add_field(name="📅 Avg Daily VC", value=format_time(int(avg_daily_vc)), inline=True)
+
     # Longest session info
     longest_session = user_data.get('longest_session', 0)
     if longest_session > 0:
