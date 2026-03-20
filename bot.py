@@ -33,6 +33,7 @@ INTENTS.members = True  # Required for member info - MUST BE ENABLED IN DEVELOPE
 INTENTS.voice_states = True  # Required for voice tracking
 INTENTS.guilds = True
 INTENTS.reactions = True
+INTENTS.presences = True  # Required for game/activity tracking - MUST BE ENABLED IN DEVELOPER PORTAL
 
 bot = commands.Bot(command_prefix='!', intents=INTENTS, help_command=None)
 
@@ -183,6 +184,7 @@ MESSAGE_COOLDOWN = config.get('message_cooldown', DEFAULT_CONFIG['message_cooldo
 voice_join_times = {}  # Track when users join voice channels
 voice_session_starts = {}  # Track session start time for longest session calculation
 message_cooldowns = {}  # Track message cooldowns per user
+game_session_starts = {}  # Track when users start playing a game {guild_user_key: (datetime, game_name)}
 
 
 def load_data():
@@ -226,6 +228,7 @@ def get_user_data(data, guild_id, user_id, username=None):
             'hourly_messages': {},         # hour str (0-23) → message count
             'mentions_received': 0,        # Times this user was @mentioned by others
             'hourly_vc': {},               # hour str (0-23) → vc seconds
+            'games_played': {},            # game_name → seconds played
         }
     else:
         # Update username if provided (in case user changed their name)
@@ -256,6 +259,8 @@ def get_user_data(data, guild_id, user_id, username=None):
             user['mentions_received'] = 0
         if 'hourly_vc' not in user:
             user['hourly_vc'] = {}
+        if 'games_played' not in user:
+            user['games_played'] = {}
 
     return data[guild_id][user_id]
 
@@ -495,6 +500,46 @@ async def on_member_join(member):
     """Cache member when they join the server"""
     # Member is automatically added to cache by discord.py, but we can log it
     print(f'New member joined and cached: {member} in {member.guild.name}')
+
+
+@bot.event
+async def on_presence_update(before, after):
+    """Track game activity for favorite game stats"""
+    if after.bot:
+        return
+
+    user_key = f"{after.guild.id}_{after.id}"
+    now = datetime.now()
+
+    # Determine the game being played before and after the update
+    def get_game(member):
+        for activity in member.activities:
+            if isinstance(activity, discord.Game):
+                return activity.name
+            if isinstance(activity, discord.Activity) and activity.type == discord.ActivityType.playing:
+                return activity.name
+        return None
+
+    game_before = get_game(before)
+    game_after = get_game(after)
+
+    # If the game changed (stopped, started, or switched)
+    if game_before != game_after:
+        # Stop tracking the previous game and save the session
+        if game_before and user_key in game_session_starts:
+            session_start, tracked_game = game_session_starts.pop(user_key)
+            seconds_played = int((now - session_start).total_seconds())
+            if seconds_played > 0:
+                data = load_data()
+                user_data = get_user_data(data, after.guild.id, after.id, str(after))
+                user_data['games_played'][tracked_game] = (
+                    user_data['games_played'].get(tracked_game, 0) + seconds_played
+                )
+                save_data(data)
+
+        # Start tracking the new game
+        if game_after:
+            game_session_starts[user_key] = (now, game_after)
 
 
 @bot.event
@@ -952,6 +997,26 @@ async def profile(ctx, member: discord.Member = None):
             value="\n".join(top_3_partners) if top_3_partners else "No partners yet",
             inline=False
         )
+
+    # Current game (live from presence)
+    def get_current_game(m):
+        for activity in m.activities:
+            if isinstance(activity, discord.Game):
+                return activity.name
+            if isinstance(activity, discord.Activity) and activity.type == discord.ActivityType.playing:
+                return activity.name
+        return None
+
+    current_game = get_current_game(member)
+    if current_game:
+        embed.add_field(name="🎮 Currently Playing", value=current_game, inline=True)
+
+    # Favorite game (most time spent, from stored history)
+    games_played = user_data.get('games_played', {})
+    if games_played:
+        fav_game = max(games_played, key=games_played.get)
+        fav_game_time = format_time(games_played[fav_game])
+        embed.add_field(name="🏅 Favorite Game", value=f"{fav_game}\n({fav_game_time} played)", inline=True)
 
     embed.set_footer(text="⚡ Calculating...")
 
