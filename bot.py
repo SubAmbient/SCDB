@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 # Bot version
-BOT_VERSION = "0.3.3"
+BOT_VERSION = "0.3.4"
 
 # Load environment variables from .env file
 load_dotenv()
