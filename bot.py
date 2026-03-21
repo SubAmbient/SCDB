@@ -14,7 +14,7 @@ import aiohttp
 from profile_card import generate_profile_card
 
 # Bot version
-BOT_VERSION = "0.3.5"
+BOT_VERSION = "0.4.0"
 
 # Load environment variables from .env file
 load_dotenv()
