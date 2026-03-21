@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 # Bot version
-BOT_VERSION = "0.3.4"
+BOT_VERSION = "0.3.5"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -918,51 +918,64 @@ async def profile(ctx, member: discord.Member = None):
     xp_needed = next_level_xp - xp_for_next_level(user_data['level'] - 1)
     progress_percentage = int((xp_progress / xp_needed) * 100) if xp_needed > 0 else 100
 
-    # Create progress bar
-    bar_length = 10
+    # Wider, nicer progress bar (20 chars)
+    bar_length = 20
     filled = int((xp_progress / xp_needed) * bar_length) if xp_needed > 0 else bar_length
-    progress_bar = "█" * filled + "░" * (bar_length - filled)
+    progress_bar = "▰" * filled + "▱" * (bar_length - filled)
+
+    # Pick embed color from rank
+    if rank == 1:
+        embed_color = discord.Color.from_rgb(255, 215, 0)    # Gold
+    elif rank == 2:
+        embed_color = discord.Color.from_rgb(192, 192, 192)  # Silver
+    elif rank == 3:
+        embed_color = discord.Color.from_rgb(205, 127, 50)   # Bronze
+    else:
+        embed_color = discord.Color.from_rgb(114, 137, 218)  # Discord blurple
 
     embed = discord.Embed(
-        title=f"👤 {member.display_name}'s Profile",
-        color=discord.Color.blue()
+        color=embed_color
     )
+    embed.set_author(name=f"{member.display_name}'s Profile", icon_url=member.display_avatar.url)
     embed.set_thumbnail(url=member.display_avatar.url)
 
-    # Rank and Level section
-    embed.add_field(name="📊 Rank", value=f"#{rank}", inline=True)
-    embed.add_field(name="⭐ Level", value=user_data['level'], inline=True)
-    embed.add_field(name="🏆 Total XP", value=f"{user_data['xp']:,}", inline=True)
+    # ── Row 1: Rank / Level / XP ──────────────────────────────────────────
+    embed.add_field(name="📊  Rank",     value=f"**#{rank}**",                    inline=True)
+    embed.add_field(name="⭐  Level",    value=f"**{user_data['level']}**",        inline=True)
+    embed.add_field(name="🏆  Total XP", value=f"**{user_data['xp']:,}**",        inline=True)
 
-    # Progress to next level
+    # ── Progress bar ──────────────────────────────────────────────────────
     embed.add_field(
-        name="📈 Progress to Next Level",
-        value=f"{progress_bar} {progress_percentage}%\n{xp_progress:,}/{xp_needed:,} XP to Level {user_data['level'] + 1}",
+        name="📈  Progress to Level " + str(user_data['level'] + 1),
+        value=f"`{progress_bar}` **{progress_percentage}%**\n"
+              f"{xp_progress:,} / {xp_needed:,} XP",
         inline=False
     )
 
-    # Activity Stats
-    embed.add_field(name="💬 Messages", value=f"{user_data['messages']:,}", inline=True)
-    embed.add_field(name="❤️ Reactions", value=f"{user_data['reactions']:,}", inline=True)
-    embed.add_field(name="🎙️ VC Time", value=format_time(user_data.get('vc_seconds', 0)), inline=True)
+    # ── Blank row separator ───────────────────────────────────────────────
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
 
+    # ── Row 2: Messages / Reactions / VC Time ─────────────────────────────
+    embed.add_field(name="💬  Messages",  value=f"{user_data['messages']:,}",                      inline=True)
+    embed.add_field(name="❤️  Reactions", value=f"{user_data['reactions']:,}",                     inline=True)
+    embed.add_field(name="🎙️  VC Time",   value=format_time(user_data.get('vc_seconds', 0)),       inline=True)
+
+    # ── Row 3: Mentions / Activity Type / Peak VC Hour ────────────────────
     mentions = user_data.get('mentions_received', 0)
-    embed.add_field(name="📣 Times Mentioned", value=f"{mentions:,}", inline=True)
-
     activity_type = classify_activity(user_data.get('hourly_messages', {}))
-    embed.add_field(name="🕐 Activity Type", value=activity_type, inline=True)
-
     peak_vc = format_peak_hour(user_data.get('hourly_vc', {}))
-    if peak_vc:
-        embed.add_field(name="🎙️ Peak VC Hour", value=peak_vc, inline=True)
 
+    embed.add_field(name="📣  Mentioned",    value=f"{mentions:,}",  inline=True)
+    embed.add_field(name="🕐  Activity Type", value=activity_type,   inline=True)
+    embed.add_field(name="🔊  Peak VC Hour",  value=peak_vc or "—",  inline=True)
+
+    # ── Row 4: Avg Daily VC + Longest Session (pair, padded to 3) ─────────
     bot_joined = ctx.guild.me.joined_at
     if bot_joined:
         days_since_join = max((datetime.now(bot_joined.tzinfo) - bot_joined).days, 1)
         avg_daily_vc = user_data.get('vc_seconds', 0) / days_since_join
-        embed.add_field(name="📅 Avg Daily VC", value=format_time(int(avg_daily_vc)), inline=True)
+        embed.add_field(name="📅  Avg Daily VC", value=format_time(int(avg_daily_vc)), inline=True)
 
-    # Longest session info
     longest_session = user_data.get('longest_session', 0)
     if longest_session > 0:
         longest_str = format_time(longest_session)
@@ -971,34 +984,36 @@ async def profile(ctx, member: discord.Member = None):
             try:
                 date_obj = datetime.fromisoformat(session_date)
                 date_str = date_obj.strftime("%Y-%m-%d")
-                embed.add_field(name="⏱️ Longest Session", value=f"{longest_str}\n({date_str})", inline=True)
+                longest_val = f"{longest_str}\n`{date_str}`"
             except:
-                embed.add_field(name="⏱️ Longest Session", value=longest_str, inline=True)
+                longest_val = longest_str
         else:
-            embed.add_field(name="⏱️ Longest Session", value=longest_str, inline=True)
+            longest_val = longest_str
+        embed.add_field(name="⏱️  Longest Session", value=longest_val, inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)  # pad to 3
+    elif bot_joined:
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
 
-    # Top VC Partners - Use cached member lookup
+    # ── Top VC Partners ───────────────────────────────────────────────────
     vc_partners = user_data.get('vc_partners', {})
     if vc_partners:
         sorted_partners = sorted(vc_partners.items(), key=lambda x: x[1]['seconds'], reverse=True)
-        top_3_partners = []
-
-        for partner_id, partner_data in sorted_partners[:3]:
+        top_3_parts = []
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, (partner_id, partner_data) in enumerate(sorted_partners[:3]):
             time_str = format_time(partner_data['seconds'])
-            # Use cached member lookup instead of fetch
             partner_member = ctx.guild.get_member(int(partner_id))
-            partner_name = partner_member.display_name if partner_member else partner_data.get('username',
-                                                                                               f'User {partner_id}')
-
-            top_3_partners.append(f"**{partner_name}** - {time_str}")
+            partner_name = partner_member.display_name if partner_member else partner_data.get('username', f'User {partner_id}')
+            top_3_parts.append(f"{medals[idx]} **{partner_name}** — {time_str}")
 
         embed.add_field(
-            name="🤝 Top VC Partners",
-            value="\n".join(top_3_partners) if top_3_partners else "No partners yet",
+            name="🤝  Top VC Partners",
+            value="\n".join(top_3_parts),
             inline=False
         )
 
-    # Current game (live from presence)
+    # ── Current Game + Favorite Game ──────────────────────────────────────
     def get_current_game(m):
         for activity in m.activities:
             if isinstance(activity, discord.Game):
@@ -1008,15 +1023,17 @@ async def profile(ctx, member: discord.Member = None):
         return None
 
     current_game = get_current_game(member)
-    if current_game:
-        embed.add_field(name="🎮 Currently Playing", value=current_game, inline=True)
-
-    # Favorite game (most time spent, from stored history)
     games_played = user_data.get('games_played', {})
-    if games_played:
-        fav_game = max(games_played, key=games_played.get)
-        fav_game_time = format_time(games_played[fav_game])
-        embed.add_field(name="🏅 Favorite Game", value=f"{fav_game}\n({fav_game_time} played)", inline=True)
+
+    if current_game or games_played:
+        if current_game:
+            embed.add_field(name="🎮  Now Playing", value=f"**{current_game}**", inline=True)
+        if games_played:
+            fav_game = max(games_played, key=games_played.get)
+            fav_game_time = format_time(games_played[fav_game])
+            embed.add_field(name="🏅  Favorite Game", value=f"**{fav_game}**\n{fav_game_time} played", inline=True)
+            if current_game:
+                embed.add_field(name="\u200b", value="\u200b", inline=True)  # pad to 3
 
     embed.set_footer(text="⚡ Calculating...")
 
