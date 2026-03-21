@@ -3,15 +3,12 @@ from discord.ext import commands, tasks
 import json
 import os
 import asyncio
-import io
 import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import hashlib
 import re
 from typing import Optional
-import aiohttp
-from profile_card import generate_profile_card
 
 # Bot version
 BOT_VERSION = "0.4.0"
@@ -904,114 +901,149 @@ async def set_leaderboard(ctx):
 
 @bot.command(name='profile')
 async def profile(ctx, member: discord.Member = None):
-    """Show a beautiful image profile card for yourself or another user."""
+    """Show comprehensive profile for yourself or another user"""
     start_time = time.perf_counter()
     member = member or ctx.author
 
-    data      = load_data()
+    data = load_data()
     user_data = get_user_data(data, ctx.guild.id, member.id)
 
-    # ── Rank ──────────────────────────────────────────────────────────────
+    # Calculate rank using cached function
     guild_data = data.get(str(ctx.guild.id), {})
-    rank       = get_cached_rank(ctx.guild.id, member.id, guild_data)
+    rank = get_cached_rank(ctx.guild.id, member.id, guild_data)
 
-    # ── XP progress ───────────────────────────────────────────────────────
+    # Calculate XP for next level
     next_level_xp = xp_for_next_level(user_data['level'])
-    xp_progress   = user_data['xp'] - xp_for_next_level(user_data['level'] - 1)
-    xp_needed     = next_level_xp - xp_for_next_level(user_data['level'] - 1)
+    xp_progress = user_data['xp'] - xp_for_next_level(user_data['level'] - 1)
+    xp_needed = next_level_xp - xp_for_next_level(user_data['level'] - 1)
+    progress_percentage = int((xp_progress / xp_needed) * 100) if xp_needed > 0 else 100
 
-    # ── Avg daily VC ──────────────────────────────────────────────────────
-    bot_joined    = ctx.guild.me.joined_at
-    avg_daily_str = "—"
-    if bot_joined:
-        days          = max((datetime.now(bot_joined.tzinfo) - bot_joined).days, 1)
-        avg_daily_str = format_time(int(user_data.get('vc_seconds', 0) / days))
+    # Wider, nicer progress bar (20 chars)
+    bar_length = 20
+    filled = int((xp_progress / xp_needed) * bar_length) if xp_needed > 0 else bar_length
+    progress_bar = "▰" * filled + "▱" * (bar_length - filled)
 
-    # ── Longest session ───────────────────────────────────────────────────
-    longest_session = user_data.get('longest_session', 0)
-    longest_str     = format_time(longest_session) if longest_session > 0 else "—"
-    session_date    = ""
-    if longest_session > 0 and user_data.get('longest_session_date'):
-        try:
-            d            = datetime.fromisoformat(user_data['longest_session_date'])
-            session_date = d.strftime("%Y-%m-%d")
-        except Exception:
-            pass
+    # Pick embed color from rank
+    if rank == 1:
+        embed_color = discord.Color.from_rgb(255, 215, 0)    # Gold
+    elif rank == 2:
+        embed_color = discord.Color.from_rgb(192, 192, 192)  # Silver
+    elif rank == 3:
+        embed_color = discord.Color.from_rgb(205, 127, 50)   # Bronze
+    else:
+        embed_color = discord.Color.from_rgb(114, 137, 218)  # Discord blurple
 
-    # ── VC partners ───────────────────────────────────────────────────────
-    vc_partners_list = []
-    raw_partners     = user_data.get('vc_partners', {})
-    if raw_partners:
-        for pid, pdata in sorted(raw_partners.items(),
-                                 key=lambda x: x[1]['seconds'], reverse=True)[:3]:
-            pm    = ctx.guild.get_member(int(pid))
-            pname = pm.display_name if pm else pdata.get('username', f'User {pid}')
-            vc_partners_list.append((pname, format_time(pdata['seconds'])))
+    embed = discord.Embed(
+        color=embed_color
+    )
+    embed.set_author(name=f"{member.display_name}'s Profile", icon_url=member.display_avatar.url)
+    embed.set_thumbnail(url=member.display_avatar.url)
 
-    # ── Favorite game ─────────────────────────────────────────────────────
-    games         = user_data.get('games_played', {})
-    fav_game      = max(games, key=games.get) if games else ""
-    fav_game_time = format_time(games[fav_game]) + " played" if fav_game else ""
+    # ── Row 1: Rank / Level / XP ──────────────────────────────────────────
+    embed.add_field(name="📊  Rank",     value=f"**#{rank}**",                    inline=True)
+    embed.add_field(name="⭐  Level",    value=f"**{user_data['level']}**",        inline=True)
+    embed.add_field(name="🏆  Total XP", value=f"**{user_data['xp']:,}**",        inline=True)
 
-    # ── Activity type + peak VC hour ─────────────────────────────────────
-    activity_type = classify_activity(user_data.get('hourly_messages', {}))
-    peak_vc_hour  = format_peak_hour(user_data.get('hourly_vc', {})) or "—"
-
-    # ── Download avatar (256 px) ──────────────────────────────────────────
-    avatar_bytes = None
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                str(member.display_avatar.replace(size=256).url)
-            ) as resp:
-                if resp.status == 200:
-                    avatar_bytes = await resp.read()
-    except Exception:
-        pass
-
-    # Fallback: generate a simple coloured circle if download fails
-    if not avatar_bytes:
-        from PIL import Image as _PILImage, ImageDraw as _PILDraw
-        _r = (member.id >> 16) & 0xFF
-        _g = (member.id >>  8) & 0xFF
-        _b =  member.id        & 0xFF
-        _av = _PILImage.new("RGBA", (256, 256), (_r, _g, _b, 255))
-        _PILDraw.Draw(_av).ellipse([0, 0, 255, 255], fill=(_r, _g, _b, 255))
-        _buf = io.BytesIO()
-        _av.save(_buf, "PNG")
-        avatar_bytes = _buf.getvalue()
-
-    # ── Measure time before generating card ───────────────────────────────
-    response_time = (time.perf_counter() - start_time) * 1000
-
-    # ── Generate card image ───────────────────────────────────────────────
-    card_bytes = generate_profile_card(
-        username             = member.display_name,
-        avatar_bytes         = avatar_bytes,
-        rank                 = rank,
-        level                = user_data['level'],
-        total_xp             = user_data['xp'],
-        xp_progress          = xp_progress,
-        xp_needed            = xp_needed,
-        messages             = user_data['messages'],
-        reactions            = user_data['reactions'],
-        vc_time              = format_time(user_data.get('vc_seconds', 0)),
-        mentions             = user_data.get('mentions_received', 0),
-        activity_type        = activity_type,
-        peak_vc_hour         = peak_vc_hour,
-        avg_daily_vc         = avg_daily_str,
-        longest_session      = longest_str,
-        longest_session_date = session_date,
-        vc_partners          = vc_partners_list,
-        favorite_game        = fav_game,
-        favorite_game_time   = fav_game_time,
-        response_ms          = f"{response_time:.0f}ms",
+    # ── Progress bar ──────────────────────────────────────────────────────
+    embed.add_field(
+        name="📈  Progress to Level " + str(user_data['level'] + 1),
+        value=f"`{progress_bar}` **{progress_percentage}%**\n"
+              f"{xp_progress:,} / {xp_needed:,} XP",
+        inline=False
     )
 
-    await ctx.send(file=discord.File(
-        fp       = io.BytesIO(card_bytes),
-        filename = f"profile_{member.id}.png",
-    ))
+    # ── Blank row separator ───────────────────────────────────────────────
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
+
+    # ── Row 2: Messages / Reactions / VC Time ─────────────────────────────
+    embed.add_field(name="💬  Messages",  value=f"{user_data['messages']:,}",                      inline=True)
+    embed.add_field(name="❤️  Reactions", value=f"{user_data['reactions']:,}",                     inline=True)
+    embed.add_field(name="🎙️  VC Time",   value=format_time(user_data.get('vc_seconds', 0)),       inline=True)
+
+    # ── Row 3: Mentions / Activity Type / Peak VC Hour ────────────────────
+    mentions = user_data.get('mentions_received', 0)
+    activity_type = classify_activity(user_data.get('hourly_messages', {}))
+    peak_vc = format_peak_hour(user_data.get('hourly_vc', {}))
+
+    embed.add_field(name="📣  Mentioned",    value=f"{mentions:,}",  inline=True)
+    embed.add_field(name="🕐  Activity Type", value=activity_type,   inline=True)
+    embed.add_field(name="🔊  Peak VC Hour",  value=peak_vc or "—",  inline=True)
+
+    # ── Row 4: Avg Daily VC + Longest Session (pair, padded to 3) ─────────
+    bot_joined = ctx.guild.me.joined_at
+    if bot_joined:
+        days_since_join = max((datetime.now(bot_joined.tzinfo) - bot_joined).days, 1)
+        avg_daily_vc = user_data.get('vc_seconds', 0) / days_since_join
+        embed.add_field(name="📅  Avg Daily VC", value=format_time(int(avg_daily_vc)), inline=True)
+
+    longest_session = user_data.get('longest_session', 0)
+    if longest_session > 0:
+        longest_str = format_time(longest_session)
+        session_date = user_data.get('longest_session_date')
+        if session_date:
+            try:
+                date_obj = datetime.fromisoformat(session_date)
+                date_str = date_obj.strftime("%Y-%m-%d")
+                longest_val = f"{longest_str}\n`{date_str}`"
+            except:
+                longest_val = longest_str
+        else:
+            longest_val = longest_str
+        embed.add_field(name="⏱️  Longest Session", value=longest_val, inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)  # pad to 3
+    elif bot_joined:
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    # ── Top VC Partners ───────────────────────────────────────────────────
+    vc_partners = user_data.get('vc_partners', {})
+    if vc_partners:
+        sorted_partners = sorted(vc_partners.items(), key=lambda x: x[1]['seconds'], reverse=True)
+        top_3_parts = []
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, (partner_id, partner_data) in enumerate(sorted_partners[:3]):
+            time_str = format_time(partner_data['seconds'])
+            partner_member = ctx.guild.get_member(int(partner_id))
+            partner_name = partner_member.display_name if partner_member else partner_data.get('username', f'User {partner_id}')
+            top_3_parts.append(f"{medals[idx]} **{partner_name}** — {time_str}")
+
+        embed.add_field(
+            name="🤝  Top VC Partners",
+            value="\n".join(top_3_parts),
+            inline=False
+        )
+
+    # ── Current Game + Favorite Game ──────────────────────────────────────
+    def get_current_game(m):
+        for activity in m.activities:
+            if isinstance(activity, discord.Game):
+                return activity.name
+            if isinstance(activity, discord.Activity) and activity.type == discord.ActivityType.playing:
+                return activity.name
+        return None
+
+    current_game = get_current_game(member)
+    games_played = user_data.get('games_played', {})
+
+    if current_game or games_played:
+        if current_game:
+            embed.add_field(name="🎮  Now Playing", value=f"**{current_game}**", inline=True)
+        if games_played:
+            fav_game = max(games_played, key=games_played.get)
+            fav_game_time = format_time(games_played[fav_game])
+            embed.add_field(name="🏅  Favorite Game", value=f"**{fav_game}**\n{fav_game_time} played", inline=True)
+            if current_game:
+                embed.add_field(name="\u200b", value="\u200b", inline=True)  # pad to 3
+
+    embed.set_footer(text="⚡ Calculating...")
+
+    # Send message and measure total time
+    message = await ctx.send(embed=embed)
+    response_time = (time.perf_counter() - start_time) * 1000
+
+    # Update footer with actual response time
+    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
+    await message.edit(embed=embed)
 
 
 @bot.command(name='rank')
