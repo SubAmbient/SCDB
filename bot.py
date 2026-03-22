@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 # Bot version
-BOT_VERSION = "0.4.1"
+BOT_VERSION = "0.4.2"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -1013,13 +1013,12 @@ async def profile(ctx, member: discord.Member = None):
         embed.add_field(
             name="🤝  Top VC Partners",
             value="\n".join(top_3_parts),
-            inline=False
+            inline=True
         )
 
     # ── Top Favorite Games ─────────────────────────────────────────────────
     games_played = user_data.get('games_played', {})
     if games_played:
-        embed.add_field(name="\u200b", value="\u200b", inline=False)  # margin
         sorted_games = sorted(games_played.items(), key=lambda x: x[1], reverse=True)
         top_3_games = []
         medals = ["🥇", "🥈", "🥉"]
@@ -1029,7 +1028,7 @@ async def profile(ctx, member: discord.Member = None):
         embed.add_field(
             name="🎮  Favorite Games",
             value="\n".join(top_3_games),
-            inline=False
+            inline=True
         )
 
     embed.set_footer(text="⚡ Calculating...")
