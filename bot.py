@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 # Bot version
-BOT_VERSION = "0.4.0"
+BOT_VERSION = "0.4.1"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -969,12 +969,17 @@ async def profile(ctx, member: discord.Member = None):
     embed.add_field(name="🕐  Activity Type", value=activity_type,   inline=True)
     embed.add_field(name="🔊  Peak VC Hour",  value=peak_vc or "—",  inline=True)
 
-    # ── Row 4: Avg Daily VC + Longest Session (pair, padded to 3) ─────────
+    # ── Row 4: Time in Games / Avg Daily VC / Longest Session ────────────
+    total_game_time = sum(user_data.get('games_played', {}).values())
+    embed.add_field(name="🎮  Time in Games", value=format_time(total_game_time), inline=True)
+
     bot_joined = ctx.guild.me.joined_at
     if bot_joined:
         days_since_join = max((datetime.now(bot_joined.tzinfo) - bot_joined).days, 1)
         avg_daily_vc = user_data.get('vc_seconds', 0) / days_since_join
         embed.add_field(name="📅  Avg Daily VC", value=format_time(int(avg_daily_vc)), inline=True)
+    else:
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
 
     longest_session = user_data.get('longest_session', 0)
     if longest_session > 0:
@@ -990,9 +995,7 @@ async def profile(ctx, member: discord.Member = None):
         else:
             longest_val = longest_str
         embed.add_field(name="⏱️  Longest Session", value=longest_val, inline=True)
-        embed.add_field(name="\u200b", value="\u200b", inline=True)  # pad to 3
-    elif bot_joined:
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
+    else:
         embed.add_field(name="\u200b", value="\u200b", inline=True)
 
     # ── Top VC Partners ───────────────────────────────────────────────────
@@ -1013,27 +1016,21 @@ async def profile(ctx, member: discord.Member = None):
             inline=False
         )
 
-    # ── Current Game + Favorite Game ──────────────────────────────────────
-    def get_current_game(m):
-        for activity in m.activities:
-            if isinstance(activity, discord.Game):
-                return activity.name
-            if isinstance(activity, discord.Activity) and activity.type == discord.ActivityType.playing:
-                return activity.name
-        return None
-
-    current_game = get_current_game(member)
+    # ── Top Favorite Games ─────────────────────────────────────────────────
     games_played = user_data.get('games_played', {})
-
-    if current_game or games_played:
-        if current_game:
-            embed.add_field(name="🎮  Now Playing", value=f"**{current_game}**", inline=True)
-        if games_played:
-            fav_game = max(games_played, key=games_played.get)
-            fav_game_time = format_time(games_played[fav_game])
-            embed.add_field(name="🏅  Favorite Game", value=f"**{fav_game}**\n{fav_game_time} played", inline=True)
-            if current_game:
-                embed.add_field(name="\u200b", value="\u200b", inline=True)  # pad to 3
+    if games_played:
+        embed.add_field(name="\u200b", value="\u200b", inline=False)  # margin
+        sorted_games = sorted(games_played.items(), key=lambda x: x[1], reverse=True)
+        top_3_games = []
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, (game_name, seconds) in enumerate(sorted_games[:3]):
+            time_str = format_time(seconds)
+            top_3_games.append(f"{medals[idx]} **{game_name}** — {time_str}")
+        embed.add_field(
+            name="🎮  Favorite Games",
+            value="\n".join(top_3_games),
+            inline=False
+        )
 
     embed.set_footer(text="⚡ Calculating...")
 
