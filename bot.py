@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 # Bot version
-BOT_VERSION = "0.4.2"
+BOT_VERSION = "0.4.3"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -66,8 +66,8 @@ def load_stop_words(filepath='stop_words.json'):
 # Common words to exclude from favorite_word tracking
 STOP_WORDS = load_stop_words()
 
-# Store the leaderboard message ID for updating
-leaderboard_message = None
+# Store the leaderboard message IDs for updating (list to support multiple messages)
+leaderboard_messages = []
 
 # Cache for rank calculations
 _rank_cache = {}
@@ -348,8 +348,14 @@ async def send_levelup_message(guild, member, level, context_channel=None):
             break
 
 
-def create_leaderboard_embed(guild, guild_data):
-    """Create the leaderboard embed"""
+def create_leaderboard_embeds(guild, guild_data):
+    """Create leaderboard embeds with 3 columns of 10 users each.
+
+    Each embed field holds 10 users. Discord renders 3 inline fields per visual
+    row, so every 3 fields = one visible row of 30 users.  When there are more
+    than 30 users a new set of 3 rows starts below, and when the 25-field embed
+    limit is reached a second embed (message) is used.
+    """
     if not guild_data:
         embed = discord.Embed(
             title=f"🏆 {guild.name} - Live Leaderboard",
@@ -357,58 +363,87 @@ def create_leaderboard_embed(guild, guild_data):
             color=discord.Color.gold()
         )
         embed.set_footer(text=f"Updates every 10 seconds • Bot v{BOT_VERSION}")
-        return embed
+        return [embed]
 
     # Sort by XP
     sorted_users = sorted(guild_data.items(), key=lambda x: x[1].get('xp', 0), reverse=True)
 
-    embed = discord.Embed(
-        title=f"🏆 {guild.name} - Live Leaderboard",
-        description=f"All Members by XP ({len(sorted_users)} total)",
-        color=discord.Color.gold()
-    )
+    USERS_PER_FIELD = 10          # Each column holds 10 users
+    FIELDS_PER_ROW   = 3          # Discord shows 3 inline fields side-by-side
+    MAX_FIELDS       = 24         # Keep to a multiple of 3 within Discord's 25-field limit
 
-    # Show all users
-    for i, (user_id, user_data) in enumerate(sorted_users, 1):
-        # Use cached member lookup (no API call)
-        member = guild.get_member(int(user_id))
-        name = member.display_name if member else user_data.get('username', f"User {user_id}")
-
-        medal = ""
-        if i == 1:
-            medal = "🥇 "
-        elif i == 2:
-            medal = "🥈 "
-        elif i == 3:
-            medal = "🥉 "
-
-        xp = user_data.get('xp', 0)
-        level = user_data.get('level', 1)
-        messages = user_data.get('messages', 0)
-        vc_time = format_time(user_data.get('vc_seconds', 0))
-
-        value_text = (
-            f"**Level {level}** • {xp:,} XP\n"
-            f"💬 {messages:,} msgs • 🎙️ {vc_time}"
-        )
-
-        embed.add_field(
-            name=f"{medal}#{i} {name}",
-            value=value_text,
-            inline=False
-        )
-
-    # Add timestamp
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    embed.set_footer(text=f"Last updated: {timestamp} • Updates every 10 seconds • Bot v{BOT_VERSION}")
 
-    return embed
+    # Build all column fields first
+    all_fields = []
+    for group_start in range(0, len(sorted_users), USERS_PER_FIELD):
+        group = sorted_users[group_start:group_start + USERS_PER_FIELD]
+        start_rank = group_start + 1
+        end_rank   = group_start + len(group)
+
+        lines = []
+        for rank_offset, (user_id, user_data) in enumerate(group):
+            i = start_rank + rank_offset
+            member = guild.get_member(int(user_id))
+            name   = member.display_name if member else user_data.get('username', f"User {user_id}")
+
+            medal = "🥇 " if i == 1 else "🥈 " if i == 2 else "🥉 " if i == 3 else ""
+
+            xp       = user_data.get('xp', 0)
+            level    = user_data.get('level', 1)
+            messages = user_data.get('messages', 0)
+            vc_time  = format_time(user_data.get('vc_seconds', 0))
+
+            lines.append(
+                f"{medal}**#{i} {name}**\n"
+                f"Lv.{level} • {xp:,} XP\n"
+                f"💬 {messages:,} • 🎙️ {vc_time}"
+            )
+
+        field_value = "\n\n".join(lines)
+        if len(field_value) > 1024:
+            field_value = field_value[:1021] + "..."
+
+        all_fields.append((f"#{start_rank}–#{end_rank}", field_value))
+
+    # Pad so every embed ends on a full row of 3 (keeps columns aligned)
+    remainder = len(all_fields) % FIELDS_PER_ROW
+    if remainder:
+        for _ in range(FIELDS_PER_ROW - remainder):
+            all_fields.append(("\u200b", "\u200b"))   # invisible zero-width space
+
+    # Split padded fields across embeds (MAX_FIELDS each)
+    embeds = []
+    for embed_start in range(0, len(all_fields), MAX_FIELDS):
+        batch = all_fields[embed_start:embed_start + MAX_FIELDS]
+
+        if embed_start == 0:
+            embed = discord.Embed(
+                title=f"🏆 {guild.name} - Live Leaderboard",
+                description=f"All Members by XP ({len(sorted_users)} total)",
+                color=discord.Color.gold()
+            )
+        else:
+            embed = discord.Embed(
+                title=f"🏆 {guild.name} - Live Leaderboard (continued)",
+                color=discord.Color.gold()
+            )
+
+        for field_name, field_value in batch:
+            embed.add_field(name=field_name, value=field_value, inline=True)
+
+        embed.set_footer(
+            text=f"Last updated: {timestamp} • Updates every 10 seconds • Bot v{BOT_VERSION}"
+        )
+        embeds.append(embed)
+
+    return embeds
 
 
 @tasks.loop(seconds=10)
 async def update_leaderboard():
-    """Update the leaderboard message every 10 seconds"""
-    global leaderboard_message
+    """Update the leaderboard messages every 10 seconds"""
+    global leaderboard_messages
 
     if not LEADERBOARD_CHANNEL_ID:
         return
@@ -425,32 +460,45 @@ async def update_leaderboard():
             continue
 
         guild_data = data.get(str(guild.id), {})
-        embed = create_leaderboard_embed(guild, guild_data)
+        embeds = create_leaderboard_embeds(guild, guild_data)
 
         try:
-            # If we don't have a message yet, create one
-            if leaderboard_message is None:
-                # Check if there's an existing message by searching recent messages
-                async for msg in channel.history(limit=1):
-                    if msg.author == bot.user and msg.embeds and "Live Leaderboard" in msg.embeds[0].title:
-                        leaderboard_message = msg
-                        break
+            # If the number of embed messages has changed, rebuild from scratch
+            if len(leaderboard_messages) != len(embeds):
+                # Delete all existing leaderboard messages
+                for msg in leaderboard_messages:
+                    try:
+                        await msg.delete()
+                    except discord.NotFound:
+                        pass
+                leaderboard_messages = []
 
-                # If still no message, create a new one
-                if leaderboard_message is None:
-                    leaderboard_message = await channel.send(embed=embed)
-                else:
-                    await leaderboard_message.edit(embed=embed)
+                # Also purge any stale leaderboard messages left in the channel
+                async for msg in channel.history(limit=20):
+                    if (msg.author == bot.user and msg.embeds
+                            and "Live Leaderboard" in msg.embeds[0].title):
+                        try:
+                            await msg.delete()
+                        except discord.NotFound:
+                            pass
+
+                # Send fresh messages in order
+                for embed in embeds:
+                    new_msg = await channel.send(embed=embed)
+                    leaderboard_messages.append(new_msg)
             else:
-                # Update existing message
-                await leaderboard_message.edit(embed=embed)
+                # Edit each existing message in-place
+                for msg, embed in zip(leaderboard_messages, embeds):
+                    await msg.edit(embed=embed)
 
         except discord.NotFound:
-            # Message was deleted, create a new one
-            leaderboard_message = await channel.send(embed=embed)
+            # One or more messages were deleted externally — rebuild
+            leaderboard_messages = []
+            for embed in embeds:
+                new_msg = await channel.send(embed=embed)
+                leaderboard_messages.append(new_msg)
         except discord.HTTPException as e:
             print(f"Error updating leaderboard: {e}")
-            # If we hit rate limits or other errors, wait a bit
             await asyncio.sleep(5)
 
 
@@ -870,12 +918,12 @@ async def list_excluded_channels(ctx):
 async def set_leaderboard(ctx):
     """Set the current channel as the live leaderboard channel (Admin only)"""
     start_time = time.perf_counter()
-    global leaderboard_message, LEADERBOARD_CHANNEL_ID
+    global leaderboard_messages, LEADERBOARD_CHANNEL_ID
 
     LEADERBOARD_CHANNEL_ID = ctx.channel.id
 
-    # Clear old message reference
-    leaderboard_message = None
+    # Clear old message references
+    leaderboard_messages = []
 
     # Start the update task if not already running
     if not update_leaderboard.is_running():
@@ -884,14 +932,16 @@ async def set_leaderboard(ctx):
     # Immediately post the first leaderboard
     data = load_data()
     guild_data = data.get(str(ctx.guild.id), {})
-    embed = create_leaderboard_embed(ctx.guild, guild_data)
+    embeds = create_leaderboard_embeds(ctx.guild, guild_data)
 
     # Send initial response message
     response_msg = await ctx.send(
         f"✅ Live leaderboard set to {ctx.channel.mention}! It will update every 10 seconds.\n⚡ Calculating...")
 
-    # Send the leaderboard
-    leaderboard_message = await ctx.channel.send(embed=embed)
+    # Send the leaderboard (one message per embed)
+    for embed in embeds:
+        msg = await ctx.channel.send(embed=embed)
+        leaderboard_messages.append(msg)
 
     # Calculate total response time and update the message
     response_time = (time.perf_counter() - start_time) * 1000
