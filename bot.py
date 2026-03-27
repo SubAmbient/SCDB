@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 # Bot version
-BOT_VERSION = "0.4.4"
+BOT_VERSION = "0.4.3"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -47,8 +47,7 @@ DEFAULT_CONFIG = {
     'xp_per_reaction': 5,
     'xp_per_minute_vc': 2,
     'message_cooldown': 10,
-    'excluded_favword_channels': [],
-    'word_trackers': {}  # {guild_id: {user_id: {word: str, count: int}}}
+    'excluded_favword_channels': []
 }
 
 def load_stop_words(filepath='stop_words.json'):
@@ -154,15 +153,9 @@ def load_config():
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r') as f:
             cfg = json.load(f)
-        # Migration: ensure new keys exist in older config files
-        changed = False
+        # Migration: ensure excluded_favword_channels exists in older config files
         if 'excluded_favword_channels' not in cfg:
             cfg['excluded_favword_channels'] = []
-            changed = True
-        if 'word_trackers' not in cfg:
-            cfg['word_trackers'] = {}
-            changed = True
-        if changed:
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(cfg, f, indent=4)
         return cfg
@@ -618,17 +611,6 @@ async def on_message(message):
     # Load data once for this message
     data = load_data()
     user_data = get_user_data(data, message.guild.id, message.author.id, str(message.author))
-
-    # ── Word tracker ──────────────────────────────────────────────────────────
-    guild_trackers = config.get('word_trackers', {}).get(str(message.guild.id), {})
-    tracker_entry = guild_trackers.get(str(message.author.id))
-    if tracker_entry:
-        tracked_word = tracker_entry['word'].lower()
-        # Check if the tracked word appears as a standalone word in the message
-        if re.search(r'\b' + re.escape(tracked_word) + r'\b', message.content.lower()):
-            tracker_entry['count'] += 1
-            save_config(config)
-            await message.channel.send(f"{tracked_word}?  (x{tracker_entry['count']})")
 
     # Track favorite words (not commands)
     if not message.content.startswith(bot.command_prefix):
@@ -1533,7 +1515,6 @@ async def help_command(ctx):
             "**!activity** `[@user]` - View hourly activity charts and Early Bird / Night Owl type\n"
             "**!vcpartners** `[@user]` - See top voice channel partners\n"
             "**!favwords** `[@user]` - See top 5 most used words\n"
-            "**!wordcount** `[@user]` - Show how many times a tracked word has been said\n"
             "**!leaderboard** `[category] [page]` - View server leaderboards\n"
             "   Categories: `xp`, `level`, `messages`, `reactions`, `vc`, `session`, `mentions`\n"
             "**!version** - Display bot version information\n"
@@ -1551,9 +1532,7 @@ async def help_command(ctx):
             "**!setleaderboard** - Set current channel as live leaderboard (updates every 10s)\n"
             "**!excludechannel** `[#channel]` - Exclude a channel from all XP and stat tracking\n"
             "**!includechannel** `[#channel]` - Re-include a channel in all XP and stat tracking\n"
-            "**!excludedchannels** - List all excluded channels\n"
-            "**!trackword** `@user <word>` - Track a word for a user — bot replies with `word?` and a counter each time they say it\n"
-            "**!untrackword** `@user` - Stop tracking a word for a user\n"
+            "**!excludedchannels** - List all excluded channels"
         ),
         inline=False
     )
@@ -1569,95 +1548,7 @@ async def help_command(ctx):
     await message.edit(embed=embed)
 
 
-@bot.command(name='trackword')
-@commands.has_permissions(administrator=True)
-async def track_word(ctx, member: discord.Member, *, word: str):
-    """Set a word to track for a specific user (Admin only).
-    Usage: !trackword @user <word>
-    """
-    word = word.strip().lower()
-    if ' ' in word:
-        await ctx.send("❌ Please provide a single word (no spaces).")
-        return
-
-    guild_id = str(ctx.guild.id)
-    user_id = str(member.id)
-
-    if 'word_trackers' not in config:
-        config['word_trackers'] = {}
-    if guild_id not in config['word_trackers']:
-        config['word_trackers'][guild_id] = {}
-
-    existing = config['word_trackers'][guild_id].get(user_id)
-    config['word_trackers'][guild_id][user_id] = {
-        'word': word,
-        'count': existing['count'] if existing and existing['word'] == word else 0
-    }
-    save_config(config)
-
-    reset_note = "" if (existing and existing['word'] == word) else " (counter reset to 0)"
-    await ctx.send(
-        f"✅ Now tracking **\"{word}\"** for **{member.display_name}**{reset_note}. "
-        f"I'll reply every time they say it."
-    )
-
-
-@bot.command(name='untrackword')
-@commands.has_permissions(administrator=True)
-async def untrack_word(ctx, member: discord.Member):
-    """Remove word tracking for a specific user (Admin only).
-    Usage: !untrackword @user
-    """
-    guild_id = str(ctx.guild.id)
-    user_id = str(member.id)
-
-    trackers = config.get('word_trackers', {}).get(guild_id, {})
-    if user_id not in trackers:
-        await ctx.send(f"❌ No word is being tracked for **{member.display_name}**.")
-        return
-
-    removed = trackers.pop(user_id)
-    save_config(config)
-    await ctx.send(
-        f"✅ Stopped tracking **\"{removed['word']}\"** for **{member.display_name}**. "
-        f"Final count was **{removed['count']}**."
-    )
-
-
-@bot.command(name='wordcount')
-async def word_count(ctx, member: discord.Member = None):
-    """Show how many times a tracked word has been said.
-    Usage: !wordcount [@user]  (defaults to yourself)
-    """
-    start_time = time.perf_counter()
-    target = member or ctx.author
-
-    guild_id = str(ctx.guild.id)
-    user_id = str(target.id)
-
-    trackers = config.get('word_trackers', {}).get(guild_id, {})
-    entry = trackers.get(user_id)
-
-    if not entry:
-        await ctx.send(f"❌ No word is being tracked for **{target.display_name}**.")
-        return
-
-    embed = discord.Embed(
-        title="🔢 Word Tracker",
-        color=discord.Color.orange()
-    )
-    embed.add_field(name="User", value=target.display_name, inline=True)
-    embed.add_field(name="Tracked Word", value=f'"{entry["word"]}"', inline=True)
-    embed.add_field(name="Times Said", value=f"{entry['count']:,}", inline=True)
-    embed.set_footer(text="⚡ Calculating...")
-
-    message = await ctx.send(embed=embed)
-    response_time = (time.perf_counter() - start_time) * 1000
-    embed.set_footer(text=f"⚡ {response_time:.0f}ms")
-    await message.edit(embed=embed)
-
-
-
+if __name__ == '__main__':
     # Get token from environment variable or replace with your token
     TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 
