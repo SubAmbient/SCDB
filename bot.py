@@ -47,7 +47,9 @@ DEFAULT_CONFIG = {
     'xp_per_reaction': 5,
     'xp_per_minute_vc': 2,
     'message_cooldown': 10,
-    'excluded_favword_channels': []
+    'excluded_favword_channels': [],
+    'game_alert_games': [],      # List of game names to watch for
+    'game_alert_user_id': None   # Discord user ID to DM when a watched game starts
 }
 
 def load_stop_words(filepath='stop_words.json'):
@@ -156,6 +158,17 @@ def load_config():
         # Migration: ensure excluded_favword_channels exists in older config files
         if 'excluded_favword_channels' not in cfg:
             cfg['excluded_favword_channels'] = []
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(cfg, f, indent=4)
+        # Migration: ensure game alert fields exist in older config files
+        changed = False
+        if 'game_alert_games' not in cfg:
+            cfg['game_alert_games'] = []
+            changed = True
+        if 'game_alert_user_id' not in cfg:
+            cfg['game_alert_user_id'] = None
+            changed = True
+        if changed:
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(cfg, f, indent=4)
         return cfg
@@ -588,6 +601,19 @@ async def on_presence_update(before, after):
         # Start tracking the new game
         if game_after:
             game_session_starts[user_key] = (now, game_after)
+
+        # --- Game alert: DM the configured user if a watched game just started ---
+        if game_after and game_before != game_after:
+            alert_games = config.get('game_alert_games', [])
+            alert_user_id = config.get('game_alert_user_id')
+            if alert_user_id and any(game_after.lower() == g.lower() for g in alert_games):
+                try:
+                    alert_user = await bot.fetch_user(int(alert_user_id))
+                    await alert_user.send(
+                        f"🎮 **{after.display_name}** started playing **{game_after}**!"
+                    )
+                except Exception as e:
+                    print(f"[Game Alert] Failed to DM user {alert_user_id}: {e}")
 
 
 @bot.event
@@ -1400,6 +1426,66 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
     await message.edit(embed=embed)
 
 
+@bot.command(name='setalertuser')
+@commands.has_permissions(administrator=True)
+async def set_alert_user(ctx, member: discord.Member):
+    """Set the user who receives game-start DM alerts (Admin only)"""
+    config['game_alert_user_id'] = member.id
+    save_config(config)
+    await ctx.send(f"✅ Game alerts will now be sent to **{member.display_name}**.")
+
+
+@bot.command(name='addalertgame')
+@commands.has_permissions(administrator=True)
+async def add_alert_game(ctx, *, game: str):
+    """Add a game to the alert watchlist (Admin only)"""
+    games = config.setdefault('game_alert_games', [])
+    if any(g.lower() == game.lower() for g in games):
+        await ctx.send(f"⚠️ **{game}** is already on the watchlist.")
+        return
+    games.append(game)
+    save_config(config)
+    await ctx.send(f"✅ Added **{game}** to the game alert watchlist.")
+
+
+@bot.command(name='removealertgame')
+@commands.has_permissions(administrator=True)
+async def remove_alert_game(ctx, *, game: str):
+    """Remove a game from the alert watchlist (Admin only)"""
+    games = config.get('game_alert_games', [])
+    match = next((g for g in games if g.lower() == game.lower()), None)
+    if not match:
+        await ctx.send(f"❌ **{game}** was not found on the watchlist.")
+        return
+    games.remove(match)
+    save_config(config)
+    await ctx.send(f"✅ Removed **{match}** from the game alert watchlist.")
+
+
+@bot.command(name='alertgames')
+@commands.has_permissions(administrator=True)
+async def list_alert_games(ctx):
+    """Show the current game alert watchlist and target user (Admin only)"""
+    games = config.get('game_alert_games', [])
+    alert_user_id = config.get('game_alert_user_id')
+
+    embed = discord.Embed(title="🎮 Game Alert Watchlist", color=discord.Color.blurple())
+
+    if alert_user_id:
+        member = ctx.guild.get_member(int(alert_user_id))
+        name = member.mention if member else f"User ID {alert_user_id}"
+        embed.add_field(name="📬 Alert Recipient", value=name, inline=False)
+    else:
+        embed.add_field(name="📬 Alert Recipient", value="Not set — use `!setalertuser @user`", inline=False)
+
+    if games:
+        embed.add_field(name="🕹️ Watched Games", value="\n".join(f"• {g}" for g in games), inline=False)
+    else:
+        embed.add_field(name="🕹️ Watched Games", value="None — use `!addalertgame <name>`", inline=False)
+
+    await ctx.send(embed=embed)
+
+
 @bot.command(name='xpconfig')
 @commands.has_permissions(administrator=True)
 async def xp_config(ctx):
@@ -1441,6 +1527,21 @@ async def xp_config(ctx):
         )
     else:
         embed.add_field(name="🚫 Excluded Channels (No Tracking)", value="None", inline=False)
+
+    # Show game alert config
+    alert_games = config.get('game_alert_games', [])
+    alert_user_id = config.get('game_alert_user_id')
+    if alert_user_id:
+        alert_member = ctx.guild.get_member(int(alert_user_id))
+        alert_name = alert_member.mention if alert_member else f"User ID {alert_user_id}"
+    else:
+        alert_name = "Not set"
+    embed.add_field(name="🎮 Game Alert Recipient", value=alert_name, inline=False)
+    embed.add_field(
+        name="🕹️ Game Alert Watchlist",
+        value="\n".join(f"• {g}" for g in alert_games) if alert_games else "None",
+        inline=False
+    )
 
     embed.set_footer(text="⚡ Calculating...")
 
@@ -1532,7 +1633,11 @@ async def help_command(ctx):
             "**!setleaderboard** - Set current channel as live leaderboard (updates every 10s)\n"
             "**!excludechannel** `[#channel]` - Exclude a channel from all XP and stat tracking\n"
             "**!includechannel** `[#channel]` - Re-include a channel in all XP and stat tracking\n"
-            "**!excludedchannels** - List all excluded channels"
+            "**!excludedchannels** - List all excluded channels\n"
+            "**!setalertuser** `@user` - Set who receives game-start DM alerts\n"
+            "**!addalertgame** `<game>` - Add a game to the alert watchlist\n"
+            "**!removealertgame** `<game>` - Remove a game from the alert watchlist\n"
+            "**!alertgames** - View the game alert watchlist and recipient"
         ),
         inline=False
     )
