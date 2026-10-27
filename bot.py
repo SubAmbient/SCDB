@@ -38,8 +38,8 @@ INTENTS.presences = True  # Required for game/activity tracking - MUST BE ENABLE
 bot = commands.Bot(command_prefix='!', intents=INTENTS, help_command=None)
 
 # Configuration files
-CONFIG_FILE = 'config.json'
-DB_FILE = 'data.json'
+CONFIG_FILE = os.getenv("CONFIG_FILE", "config.json")
+DB_FILE = os.getenv("DATA_FILE", "data.json")
 
 # Default XP Configuration
 DEFAULT_CONFIG = {

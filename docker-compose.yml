@@ -1,0 +1,16 @@
+﻿services:
+  status-bot:
+    build: .
+    container_name: scdb
+    restart: unless-stopped
+    
+    env_file:
+      - stack.env
+
+    environment:
+
+      CONFIG_FILE: /app/data/config.json
+      DATA_FILE: /app/data/data.json
+
+    volumes:
+      - /home/sub/bots/scdb-data:/app/data
