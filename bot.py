@@ -242,6 +242,7 @@ def get_user_data(data, guild_id, user_id, username=None):
             'mentions_received': 0,        # Times this user was @mentioned by others
             'hourly_vc': {},               # hour str (0-23) → vc seconds
             'games_played': {},            # game_name → seconds played
+            'games_played_weekly': {},     # "YYYY-Www" → {game_name → seconds played}
         }
     else:
         # Update username if provided (in case user changed their name)
@@ -274,6 +275,8 @@ def get_user_data(data, guild_id, user_id, username=None):
             user['hourly_vc'] = {}
         if 'games_played' not in user:
             user['games_played'] = {}
+        if 'games_played_weekly' not in user:
+            user['games_played_weekly'] = {}
 
     return data[guild_id][user_id]
 
@@ -322,6 +325,27 @@ def calculate_level(xp):
 def xp_for_next_level(level):
     """Calculate XP needed for next level"""
     return (level ** 2) * 100
+
+
+def get_week_key(dt=None):
+    """Return the ISO year-week key (e.g. '2026-W44') for a datetime (default: now)"""
+    dt = dt or datetime.now()
+    iso = dt.isocalendar()
+    return f"{iso[0]}-W{iso[1]:02d}"
+
+
+def add_weekly_game_time(user_data, game_name, seconds):
+    """Add played seconds to this week's game tally and prune old weeks (keeps the last 8)"""
+    weekly = user_data.setdefault('games_played_weekly', {})
+    week = weekly.setdefault(get_week_key(), {})
+    week[game_name] = week.get(game_name, 0) + seconds
+    for old_key in sorted(weekly.keys())[:-8]:
+        del weekly[old_key]
+
+
+def format_hours(seconds):
+    """Format seconds as hours with one decimal (e.g. '2.5h')"""
+    return f"{seconds / 3600:.1f}h"
 
 
 def format_time(seconds):
@@ -596,6 +620,7 @@ async def on_presence_update(before, after):
                 user_data['games_played'][tracked_game] = (
                     user_data['games_played'].get(tracked_game, 0) + seconds_played
                 )
+                add_weekly_game_time(user_data, tracked_game, seconds_played)
                 save_data(data)
 
         # Start tracking the new game
@@ -1107,6 +1132,21 @@ async def profile(ctx, member: discord.Member = None):
             inline=True
         )
 
+    # ── Top Games This Week ────────────────────────────────────────────────
+    weekly_games = user_data.get('games_played_weekly', {}).get(get_week_key(), {})
+    if weekly_games:
+        sorted_weekly = sorted(weekly_games.items(), key=lambda x: x[1], reverse=True)
+        medals = ["🥇", "🥈", "🥉"]
+        weekly_lines = [
+            f"{medals[idx]} **{game_name}** — {format_hours(seconds)}"
+            for idx, (game_name, seconds) in enumerate(sorted_weekly[:3])
+        ]
+        embed.add_field(
+            name="📆  Top Games This Week",
+            value="\n".join(weekly_lines),
+            inline=True
+        )
+
     embed.set_footer(text="⚡ Calculating...")
 
     # Send message and measure total time
@@ -1333,7 +1373,7 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
     """Show the server leaderboard
 
     Categories: xp, level, messages, reactions, vc (voice chat time), session (longest session),
-                mentions (most mentioned)
+                mentions (most mentioned), games (most time gaming + top game)
     Usage: !leaderboard [category] [page]
     Example: !leaderboard mentions 1
     """
@@ -1358,18 +1398,28 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
         'session':  ('longest_session',   '⏱️ Longest Session',  'Session'),
         'longest':  ('longest_session',   '⏱️ Longest Session',  'Session'),
         'mentions': ('mentions_received', '📣 Most Mentioned',   'Mentions'),
+        'games':    ('games_total',       '🎮 Most Gaming',      'Time'),
+        'gaming':   ('games_total',       '🎮 Most Gaming',      'Time'),
     }
 
     if category not in valid_categories:
         await ctx.send(
-            f"❌ Invalid category! Use: `xp`, `level`, `messages`, `reactions`, `vc`, `session`, or `mentions`"
+            f"❌ Invalid category! Use: `xp`, `level`, `messages`, `reactions`, `vc`, `session`, `mentions`, or `games`"
         )
         return
 
     sort_key, title_emoji, stat_name = valid_categories[category]
 
     # Sort by selected category
-    sorted_users = sorted(guild_data.items(), key=lambda x: x[1].get(sort_key, 0), reverse=True)
+    if sort_key == 'games_total':
+        # Derived stat: total time across all games
+        def stat_of(u):
+            return sum(u.get('games_played', {}).values())
+    else:
+        def stat_of(u):
+            return u.get(sort_key, 0)
+
+    sorted_users = sorted(guild_data.items(), key=lambda x: stat_of(x[1]), reverse=True)
 
     # Pagination
     per_page = 10
@@ -1399,9 +1449,18 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
             medal = "🥉 "
 
         # Format the stat value based on category
-        stat_value = user_data.get(sort_key, 0)
+        stat_value = stat_of(user_data)
 
-        if sort_key in ['vc_seconds', 'longest_session']:
+        if sort_key == 'games_total':
+            user_games = user_data.get('games_played', {})
+            if user_games:
+                top_game = max(user_games, key=user_games.get)
+                value_text = (
+                    f"{format_time(stat_value)} • 🕹️ {top_game} ({format_hours(user_games[top_game])})"
+                )
+            else:
+                value_text = "No games tracked yet"
+        elif sort_key in ['vc_seconds', 'longest_session']:
             formatted_stat = format_time(stat_value)
             value_text = f"{formatted_stat} • Level {user_data['level']}"
         else:
@@ -1414,14 +1473,14 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
             inline=False
         )
 
-    embed.set_footer(text="Categories: xp, level, messages, reactions, vc, session, mentions • ⚡ Calculating...")
+    embed.set_footer(text="Categories: xp, level, messages, reactions, vc, session, mentions, games • ⚡ Calculating...")
 
     # Send message and measure total time
     message = await ctx.send(embed=embed)
     response_time = (time.perf_counter() - start_time) * 1000
 
     embed.set_footer(
-        text=f"Categories: xp, level, messages, reactions, vc, session, mentions • ⚡ {response_time:.0f}ms"
+        text=f"Categories: xp, level, messages, reactions, vc, session, mentions, games • ⚡ {response_time:.0f}ms"
     )
     await message.edit(embed=embed)
 
@@ -1617,7 +1676,7 @@ async def help_command(ctx):
             "**!vcpartners** `[@user]` - See top voice channel partners\n"
             "**!favwords** `[@user]` - See top 5 most used words\n"
             "**!leaderboard** `[category] [page]` - View server leaderboards\n"
-            "   Categories: `xp`, `level`, `messages`, `reactions`, `vc`, `session`, `mentions`\n"
+            "   Categories: `xp`, `level`, `messages`, `reactions`, `vc`, `session`, `mentions`, `games`\n"
             "**!version** - Display bot version information\n"
             "**!help** - Show this help message"
         ),
