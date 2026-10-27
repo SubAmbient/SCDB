@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 # Bot version
-BOT_VERSION = "0.4.3"
+BOT_VERSION = "0.4.4"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -243,6 +243,9 @@ def get_user_data(data, guild_id, user_id, username=None):
             'hourly_vc': {},               # hour str (0-23) → vc seconds
             'games_played': {},            # game_name → seconds played
             'games_played_weekly': {},     # "YYYY-Www" → {game_name → seconds played}
+            'longest_game_session': 0,         # Longest single gaming session in seconds
+            'longest_game_session_game': None, # Game played in the longest gaming session
+            'longest_game_session_date': None, # When the longest gaming session ended
         }
     else:
         # Update username if provided (in case user changed their name)
@@ -277,6 +280,12 @@ def get_user_data(data, guild_id, user_id, username=None):
             user['games_played'] = {}
         if 'games_played_weekly' not in user:
             user['games_played_weekly'] = {}
+        if 'longest_game_session' not in user:
+            user['longest_game_session'] = 0
+        if 'longest_game_session_game' not in user:
+            user['longest_game_session_game'] = None
+        if 'longest_game_session_date' not in user:
+            user['longest_game_session_date'] = None
 
     return data[guild_id][user_id]
 
@@ -621,6 +630,11 @@ async def on_presence_update(before, after):
                     user_data['games_played'].get(tracked_game, 0) + seconds_played
                 )
                 add_weekly_game_time(user_data, tracked_game, seconds_played)
+                # Record longest single gaming session (and which game it was)
+                if seconds_played > user_data.get('longest_game_session', 0):
+                    user_data['longest_game_session'] = seconds_played
+                    user_data['longest_game_session_game'] = tracked_game
+                    user_data['longest_game_session_date'] = now.isoformat()
                 save_data(data)
 
         # Start tracking the new game
@@ -1095,7 +1109,7 @@ async def profile(ctx, member: discord.Member = None):
                 longest_val = longest_str
         else:
             longest_val = longest_str
-        embed.add_field(name="⏱️  Longest Session", value=longest_val, inline=True)
+        embed.add_field(name="⏱️  Longest VC Session", value=longest_val, inline=True)
     else:
         embed.add_field(name="\u200b", value="\u200b", inline=True)
 
@@ -1146,6 +1160,21 @@ async def profile(ctx, member: discord.Member = None):
             value="\n".join(weekly_lines),
             inline=True
         )
+
+    # ── Longest Gaming Session ─────────────────────────────────────────────
+    longest_game_session = user_data.get('longest_game_session', 0)
+    if longest_game_session > 0:
+        game_session_text = (
+            f"**{format_time(longest_game_session)}**\n"
+            f"🕹️ {user_data.get('longest_game_session_game') or 'Unknown'}"
+        )
+        game_session_date = user_data.get('longest_game_session_date')
+        if game_session_date:
+            try:
+                game_session_text += f"\n`{datetime.fromisoformat(game_session_date).strftime('%Y-%m-%d')}`"
+            except ValueError:
+                pass
+        embed.add_field(name="🏅  Longest Gaming Session", value=game_session_text, inline=True)
 
     embed.set_footer(text="⚡ Calculating...")
 
@@ -1373,7 +1402,8 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
     """Show the server leaderboard
 
     Categories: xp, level, messages, reactions, vc (voice chat time), session (longest session),
-                mentions (most mentioned), games (most time gaming + top game)
+                mentions (most mentioned), games (most time gaming + top game),
+                gamesession (longest single gaming session + game)
     Usage: !leaderboard [category] [page]
     Example: !leaderboard mentions 1
     """
@@ -1400,11 +1430,13 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
         'mentions': ('mentions_received', '📣 Most Mentioned',   'Mentions'),
         'games':    ('games_total',       '🎮 Most Gaming',      'Time'),
         'gaming':   ('games_total',       '🎮 Most Gaming',      'Time'),
+        'gamesession': ('longest_game_session', '🏅 Longest Gaming Session', 'Session'),
+        'longestgame': ('longest_game_session', '🏅 Longest Gaming Session', 'Session'),
     }
 
     if category not in valid_categories:
         await ctx.send(
-            f"❌ Invalid category! Use: `xp`, `level`, `messages`, `reactions`, `vc`, `session`, `mentions`, or `games`"
+            f"❌ Invalid category! Use: `xp`, `level`, `messages`, `reactions`, `vc`, `session`, `mentions`, `games`, or `gamesession`"
         )
         return
 
@@ -1460,6 +1492,12 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
                 )
             else:
                 value_text = "No games tracked yet"
+        elif sort_key == 'longest_game_session':
+            if stat_value > 0:
+                session_game = user_data.get('longest_game_session_game') or 'Unknown'
+                value_text = f"{format_time(stat_value)} • 🕹️ {session_game}"
+            else:
+                value_text = "No gaming session tracked yet"
         elif sort_key in ['vc_seconds', 'longest_session']:
             formatted_stat = format_time(stat_value)
             value_text = f"{formatted_stat} • Level {user_data['level']}"
@@ -1473,14 +1511,14 @@ async def leaderboard(ctx, category: str = 'xp', page: int = 1):
             inline=False
         )
 
-    embed.set_footer(text="Categories: xp, level, messages, reactions, vc, session, mentions, games • ⚡ Calculating...")
+    embed.set_footer(text="Categories: xp, level, messages, reactions, vc, session, mentions, games, gamesession • ⚡ Calculating...")
 
     # Send message and measure total time
     message = await ctx.send(embed=embed)
     response_time = (time.perf_counter() - start_time) * 1000
 
     embed.set_footer(
-        text=f"Categories: xp, level, messages, reactions, vc, session, mentions, games • ⚡ {response_time:.0f}ms"
+        text=f"Categories: xp, level, messages, reactions, vc, session, mentions, games, gamesession • ⚡ {response_time:.0f}ms"
     )
     await message.edit(embed=embed)
 
@@ -1676,7 +1714,7 @@ async def help_command(ctx):
             "**!vcpartners** `[@user]` - See top voice channel partners\n"
             "**!favwords** `[@user]` - See top 5 most used words\n"
             "**!leaderboard** `[category] [page]` - View server leaderboards\n"
-            "   Categories: `xp`, `level`, `messages`, `reactions`, `vc`, `session`, `mentions`, `games`\n"
+            "   Categories: `xp`, `level`, `messages`, `reactions`, `vc`, `session`, `mentions`, `games`, `gamesession`\n"
             "**!version** - Display bot version information\n"
             "**!help** - Show this help message"
         ),
